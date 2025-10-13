@@ -13,17 +13,13 @@ unsigned int SCR_HEIGHT = 600;
 
 // Player properties
 glm::vec3 playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
-glm::vec3 playerVelocity = glm::vec3(0.0f);
-glm::vec3 playerForward = glm::vec3(0.0f, 0.0f, -1.0f);
-glm::vec3 playerRight = glm::vec3(1.0f, 0.0f, 0.0f);
+glm::vec3 playerTargetPos = playerPos;
 float playerSpeed = 8.0f;
 float playerRadius = 1.0f;
 float playerRotation = 0.0f;
+float playerRotationTarget = 0.0f;
 
 // Smooth damping properties
-glm::vec3 playerTargetPos = playerPos;
-glm::vec3 playerTargetVelocity = glm::vec3(0.0f);
-float playerRotationTarget = 0.0f;
 float positionSmoothTime = 0.1f;
 float rotationSmoothTime = 0.05f;
 float cameraSmoothTime = 0.1f;
@@ -31,8 +27,9 @@ float cameraSmoothTime = 0.1f;
 // Camera properties
 glm::vec3 cameraPos = glm::vec3(0.0f, 3.0f, 8.0f);
 glm::vec3 cameraTargetPos = cameraPos;
-glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+glm::vec3 cameraForward = glm::vec3(0.0f, 0.0f, -1.0f);  // New: camera forward vector
+glm::vec3 cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);     // New: camera right vector
 float cameraDistance = 6.0f;
 float cameraTargetDistance = cameraDistance;
 float cameraHeight = 3.0f;
@@ -50,7 +47,7 @@ float mouseSensitivity = 0.1f;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-// Simple vertex shader
+// Vertex shader source
 const char* vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -71,7 +68,7 @@ void main()
 }
 )";
 
-// Simple fragment shader
+// Fragment shader source
 const char* fragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
@@ -107,7 +104,7 @@ void main()
 }
 )";
 
-// Smooth damping function
+// Smooth damping functions
 glm::vec3 smoothDamp(glm::vec3 current, glm::vec3 target, glm::vec3& currentVelocity, float smoothTime, float deltaTime) {
     float omega = 2.0f / smoothTime;
     float x = omega * deltaTime;
@@ -140,23 +137,18 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
+// New function: Update camera vectors based on current camera angle
+void updateCameraVectors() {
+    cameraForward = glm::vec3(sin(cameraAngle), 0.0f, cos(cameraAngle));
+    cameraRight = glm::vec3(cos(cameraAngle), 0.0f, -sin(cameraAngle));
+}
+
 void updateCamera() {
     // Calculate camera position based on player position and camera angle
     float camX = sin(cameraAngle) * cameraDistance;
     float camZ = cos(cameraAngle) * cameraDistance;
 
     cameraTargetPos = playerPos + glm::vec3(camX, cameraHeight, camZ);
-    cameraFront = glm::normalize(playerPos - cameraTargetPos);
-}
-
-void updatePlayerVectors() {
-    // Update player forward and right vectors based on rotation
-    playerForward = glm::normalize(glm::vec3(
-        sin(playerRotation),
-        0.0f,
-        -cos(playerRotation)
-    ));
-    playerRight = glm::normalize(glm::cross(playerForward, glm::vec3(0.0f, 1.0f, 0.0f)));
 }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -168,7 +160,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     }
 
     float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
+    float yoffset = lastY - ypos;
     lastX = xpos;
     lastY = ypos;
 
@@ -184,6 +176,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (cameraTargetHeight > 8.0f) cameraTargetHeight = 8.0f;
 
     updateCamera();
+    updateCameraVectors(); // Update vectors when camera angle changes
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -201,27 +194,26 @@ void processInput(GLFWwindow* window) {
     // Reset player movement
     glm::vec3 movement = glm::vec3(0.0f);
 
-    // Player movement relative to camera direction
+    // Player movement relative to camera direction using pre-calculated vectors
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        movement += glm::vec3(sin(cameraAngle), 0.0f, cos(cameraAngle));
+        movement -= cameraForward;
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        movement -= glm::vec3(sin(cameraAngle), 0.0f, cos(cameraAngle));
+        movement += cameraForward;
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        movement -= glm::vec3(cos(cameraAngle), 0.0f, -sin(cameraAngle));
+        movement -= cameraRight;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        movement += glm::vec3(cos(cameraAngle), 0.0f, -sin(cameraAngle));
+        movement += cameraRight;
 
     // Normalize movement if diagonal to maintain consistent speed
     if (glm::length(movement) > 0.0f) {
         movement = glm::normalize(movement);
 
-        // Update player rotation target to face movement direction
+        // Update player rotation to face movement direction
         playerRotationTarget = atan2(movement.x, movement.z);
     }
 
     // Apply movement with speed and delta time to target position
-    playerTargetVelocity = movement * playerSpeed;
-    playerTargetPos += playerTargetVelocity * deltaTime;
+    playerTargetPos += movement * playerSpeed * deltaTime;
 
     // Simple ground collision for target position
     if (playerTargetPos.y < playerRadius) {
@@ -279,7 +271,6 @@ void generateSphere(float radius, int sectors, int stacks, std::vector<float>& v
 
     float x, y, z, xy;
     float nx, ny, nz, lengthInv = 1.0f / radius;
-    float s, t;
 
     float sectorStep = 2 * PI / sectors;
     float stackStep = PI / stacks;
@@ -383,27 +374,8 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
     }
 }
 
-// Function to generate a simple arrow for direction indicator
-void generateArrow(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
-    vertices = {
-        // Arrow base (small pyramid)
-        // Positions          // Normals
-        0.0f, 0.0f, 0.0f,    0.0f, 1.0f, 0.0f,
-        0.2f, 0.0f, 0.4f,    0.0f, 1.0f, 0.0f,
-        -0.2f, 0.0f, 0.4f,   0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f
-    };
-
-    indices = {
-        0, 1, 2,
-        1, 3, 2,
-        0, 3, 1,
-        0, 2, 3
-    };
-}
-
 int main() {
-    std::cout << "Improved Sphere Controller with Smooth Damping" << std::endl;
+    std::cout << "Sphere Controller with Smooth Damping and Clean Camera Vectors" << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
@@ -423,7 +395,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Sphere Controller with Smooth Damping", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Sphere Controller with Clean Camera Vectors", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -459,11 +431,6 @@ int main() {
     std::vector<unsigned int> groundIndices;
     generateGround(groundVertices, groundIndices);
 
-    // Generate arrow geometry for direction indicator
-    std::vector<float> arrowVertices;
-    std::vector<unsigned int> arrowIndices;
-    generateArrow(arrowVertices, arrowIndices);
-
     // Set up sphere VAO, VBO, EBO
     unsigned int sphereVAO, sphereVBO, sphereEBO;
     glGenVertexArrays(1, &sphereVAO);
@@ -496,28 +463,12 @@ int main() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Set up arrow VAO, VBO, EBO
-    unsigned int arrowVAO, arrowVBO, arrowEBO;
-    glGenVertexArrays(1, &arrowVAO);
-    glGenBuffers(1, &arrowVBO);
-    glGenBuffers(1, &arrowEBO);
-
-    glBindVertexArray(arrowVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, arrowVBO);
-    glBufferData(GL_ARRAY_BUFFER, arrowVertices.size() * sizeof(float), arrowVertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arrowEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, arrowIndices.size() * sizeof(unsigned int), arrowIndices.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
     // Light position
     glm::vec3 lightPos = glm::vec3(10.0f, 10.0f, 10.0f);
 
-    // Initialize player vectors
-    updatePlayerVectors();
+    // Initialize camera and camera vectors
     updateCamera();
+    updateCameraVectors(); // Initialize camera vectors
 
     // Smooth damping velocity variables
     glm::vec3 playerPosVelocity = glm::vec3(0.0f);
@@ -549,8 +500,8 @@ int main() {
         // Apply smooth damping to camera position
         cameraPos = smoothDamp(cameraPos, cameraTargetPos, cameraPosVelocity, cameraSmoothTime, deltaTime);
 
-        // Update player vectors after smooth rotation
-        updatePlayerVectors();
+        // Update camera vectors after smooth damping
+        updateCameraVectors();
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -583,16 +534,6 @@ int main() {
         glBindVertexArray(sphereVAO);
         glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
 
-        // Render direction arrow
-        glm::mat4 arrowModel = glm::mat4(1.0f);
-        arrowModel = glm::translate(arrowModel, playerPos + glm::vec3(0.0f, 1.5f, 0.0f));
-        arrowModel = glm::rotate(arrowModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
-        arrowModel = glm::scale(arrowModel, glm::vec3(0.5f));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(arrowModel));
-        glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.0f)));
-        glBindVertexArray(arrowVAO);
-        glDrawElements(GL_TRIANGLES, arrowIndices.size(), GL_UNSIGNED_INT, 0);
-
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -600,13 +541,10 @@ int main() {
     // Cleanup
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteVertexArrays(1, &groundVAO);
-    glDeleteVertexArrays(1, &arrowVAO);
     glDeleteBuffers(1, &sphereVBO);
     glDeleteBuffers(1, &groundVBO);
-    glDeleteBuffers(1, &arrowVBO);
     glDeleteBuffers(1, &sphereEBO);
     glDeleteBuffers(1, &groundEBO);
-    glDeleteBuffers(1, &arrowEBO);
     glDeleteProgram(shaderProgram);
 
     glfwTerminate();
