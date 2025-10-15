@@ -28,14 +28,20 @@ float cameraSmoothTime = 0.1f;
 glm::vec3 cameraPos = glm::vec3(0.0f, 3.0f, 8.0f);
 glm::vec3 cameraTargetPos = cameraPos;
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-glm::vec3 cameraForward = glm::vec3(0.0f, 0.0f, -1.0f);  // New: camera forward vector
-glm::vec3 cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);     // New: camera right vector
+glm::vec3 cameraForward = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);
 float cameraDistance = 6.0f;
 float cameraTargetDistance = cameraDistance;
 float cameraHeight = 3.0f;
 float cameraTargetHeight = cameraHeight;
 float cameraAngle = 0.0f;
 float cameraTargetAngle = cameraAngle;
+
+// Joystick properties
+bool joystickPresent = false;
+int joystickId = GLFW_JOYSTICK_1;
+float joystickDeadzone = 0.2f;
+float joystickSensitivity = 2.0f;
 
 // Mouse look
 bool firstMouse = true;
@@ -137,7 +143,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
-// New function: Update camera vectors based on current camera angle
+// Update camera vectors based on current camera angle
 void updateCameraVectors() {
     cameraForward = glm::vec3(sin(cameraAngle), 0.0f, cos(cameraAngle));
     cameraRight = glm::vec3(cos(cameraAngle), 0.0f, -sin(cameraAngle));
@@ -176,7 +182,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (cameraTargetHeight > 8.0f) cameraTargetHeight = 8.0f;
 
     updateCamera();
-    updateCameraVectors(); // Update vectors when camera angle changes
+    updateCameraVectors();
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -184,6 +190,111 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     cameraTargetDistance -= yoffset * 0.5f;
     if (cameraTargetDistance < 3.0f) cameraTargetDistance = 3.0f;
     if (cameraTargetDistance > 15.0f) cameraTargetDistance = 15.0f;
+    updateCamera();
+}
+
+// Joystick input processing
+void processJoystickInput() {
+    if (!joystickPresent) return;
+
+    int axesCount;
+    const float* axes = glfwGetJoystickAxes(joystickId, &axesCount);
+    int buttonCount;
+    const unsigned char* buttons = glfwGetJoystickButtons(joystickId, &buttonCount);
+
+    // Left stick for movement (axes 0 and 1)
+    float leftX = 0.0f, leftY = 0.0f;
+    if (axesCount >= 2) {
+        leftX = axes[0];
+        leftY = axes[1];
+
+        // Apply deadzone
+        if (fabs(leftX) < joystickDeadzone) leftX = 0.0f;
+        if (fabs(leftY) < joystickDeadzone) leftY = 0.0f;
+    }
+
+    // For 4-axis gamepads, use buttons for camera control or alternative axes
+    float cameraX = 0.0f, cameraY = 0.0f;
+
+    // Try using axes 2 and 3 for camera (common in some gamepads)
+    if (axesCount >= 4) {
+        cameraX = axes[2];
+        cameraY = axes[3];
+
+        // Apply deadzone
+        if (fabs(cameraX) < joystickDeadzone) cameraX = 0.0f;
+        if (fabs(cameraY) < joystickDeadzone) cameraY = 0.0f;
+    }
+
+    // Process movement with left stick
+    if (fabs(leftX) > 0.0f || fabs(leftY) > 0.0f) {
+        glm::vec3 movement = glm::vec3(0.0f);
+
+        // Convert joystick input to world space movement relative to camera
+        movement -= cameraForward * leftY;
+        movement += cameraRight * leftX;
+
+        // Normalize if diagonal to maintain consistent speed
+        if (glm::length(movement) > 0.0f) {
+            movement = glm::normalize(movement);
+
+            // Update player rotation to face movement direction
+            playerRotationTarget = atan2(movement.x, movement.z);
+        }
+
+        // Apply movement with speed and delta time to target position
+        playerTargetPos += movement * playerSpeed * joystickSensitivity * deltaTime;
+    }
+
+    // Process camera control - try multiple methods
+    bool cameraMoved = false;
+
+    // Method 1: Use axes 2 and 3 if available
+    if (fabs(cameraX) > 0.0f || fabs(cameraY) > 0.0f) {
+        cameraTargetAngle += cameraX * 0.05f;
+        cameraTargetHeight -= cameraY * 0.5f;
+        cameraMoved = true;
+    }
+
+    // Method 3: Use shoulder buttons for camera rotation
+    if (buttonCount >= 6) {
+        if (buttons[4] == GLFW_PRESS) {  // L1 or LB
+            cameraTargetAngle -= 1.0f * deltaTime;
+            cameraMoved = true;
+        }
+        if (buttons[5] == GLFW_PRESS) {  // R1 or RB
+            cameraTargetAngle += 1.0f * deltaTime;
+            cameraMoved = true;
+        }
+
+        // Use face buttons for camera height
+        if (buttons[0] == GLFW_PRESS) {  // A or Cross
+            cameraTargetHeight -= 2.0f * deltaTime;
+            cameraMoved = true;
+        }
+        if (buttons[1] == GLFW_PRESS) {  // B or Circle
+            cameraTargetHeight += 2.0f * deltaTime;
+            cameraMoved = true;
+        }
+    }
+
+    // Apply camera limits
+    if (cameraTargetHeight < 1.0f) cameraTargetHeight = 1.0f;
+    if (cameraTargetHeight > 8.0f) cameraTargetHeight = 8.0f;
+
+    // Camera zoom with available buttons
+    if (buttonCount >= 4) {
+        if (buttons[2] == GLFW_PRESS) {  // X or Square
+            cameraTargetDistance -= 3.0f * deltaTime;
+        }
+        if (buttons[3] == GLFW_PRESS) {  // Y or Triangle
+            cameraTargetDistance += 3.0f * deltaTime;
+        }
+
+        if (cameraTargetDistance < 3.0f) cameraTargetDistance = 3.0f;
+        if (cameraTargetDistance > 15.0f) cameraTargetDistance = 15.0f;
+    }
+
     updateCamera();
 }
 
@@ -210,17 +321,41 @@ void processInput(GLFWwindow* window) {
 
         // Update player rotation to face movement direction
         playerRotationTarget = atan2(movement.x, movement.z);
-    }
 
-    // Apply movement with speed and delta time to target position
-    playerTargetPos += movement * playerSpeed * deltaTime;
+        // Apply movement with speed and delta time to target position
+        playerTargetPos += movement * playerSpeed * deltaTime;
+    }
 
     // Simple ground collision for target position
     if (playerTargetPos.y < playerRadius) {
         playerTargetPos.y = playerRadius;
     }
 
+    // Process joystick input
+    processJoystickInput();
+
     updateCamera();
+}
+
+// Check for joystick connection
+void checkJoystickConnection() {
+    joystickPresent = glfwJoystickPresent(joystickId);
+
+    if (joystickPresent) {
+        const char* name = glfwGetJoystickName(joystickId);
+        std::cout << "Joystick connected: " << (name ? name : "Unknown") << std::endl;
+
+        int axesCount;
+        glfwGetJoystickAxes(joystickId, &axesCount);
+        std::cout << "Axes count: " << axesCount << std::endl;
+
+        int buttonCount;
+        glfwGetJoystickButtons(joystickId, &buttonCount);
+        std::cout << "Buttons count: " << buttonCount << std::endl;
+    }
+    else {
+        std::cout << "No joystick detected. Using keyboard controls only." << std::endl;
+    }
 }
 
 unsigned int compileShader(unsigned int type, const char* source) {
@@ -375,11 +510,12 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
 }
 
 int main() {
-    std::cout << "Sphere Controller with Smooth Damping and Clean Camera Vectors" << std::endl;
+    std::cout << "Sphere Controller with Joystick Support" << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
     std::cout << "  - Scroll: Zoom in/out" << std::endl;
+    std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
     std::cout << "  - ESC: Exit" << std::endl;
 
     if (!glfwInit()) {
@@ -395,7 +531,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Sphere Controller with Clean Camera Vectors", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Sphere Controller with Joystick Support", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -417,6 +553,9 @@ int main() {
     }
 
     glEnable(GL_DEPTH_TEST);
+
+    // Check for joystick connection
+    checkJoystickConnection();
 
     // Create shader program
     unsigned int shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
@@ -468,7 +607,7 @@ int main() {
 
     // Initialize camera and camera vectors
     updateCamera();
-    updateCameraVectors(); // Initialize camera vectors
+    updateCameraVectors();
 
     // Smooth damping velocity variables
     glm::vec3 playerPosVelocity = glm::vec3(0.0f);
@@ -483,6 +622,13 @@ int main() {
         float currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
+
+        // Periodically check for joystick connection
+        static float lastJoystickCheck = 0.0f;
+        if (currentFrame - lastJoystickCheck > 2.0f) { // Check every 2 seconds
+            checkJoystickConnection();
+            lastJoystickCheck = currentFrame;
+        }
 
         processInput(window);
 
