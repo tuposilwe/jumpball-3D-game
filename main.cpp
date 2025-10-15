@@ -231,7 +231,8 @@ void processJoystickInput() {
         glm::vec3 movement = glm::vec3(0.0f);
 
         // Convert joystick input to world space movement relative to camera
-        movement -= cameraForward * leftY;
+        // Note: Invert Y axis for intuitive forward/backward movement
+        movement -= cameraForward * (-leftY);  // Inverted Y
         movement += cameraRight * leftX;
 
         // Normalize if diagonal to maintain consistent speed
