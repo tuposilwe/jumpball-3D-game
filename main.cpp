@@ -43,15 +43,8 @@ float cameraAngle = 0.0f;
 float cameraTargetAngle = cameraAngle;
 
 // Camera settings for ImGui
-struct CameraSettings {
-    float distance = 6.0f;
-    float height = 3.0f;
-    float angle = 0.0f;
-    float smoothTime = 0.1f;
-    float mouseSensitivity = 0.1f;
-    float scrollSensitivity = 0.5f;
-    bool showSettings = true;
-} cameraSettings;
+bool showSettings = true;
+
 
 // Joystick properties
 bool joystickPresent = false;
@@ -64,6 +57,7 @@ bool firstMouse = true;
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 float mouseSensitivity = 0.1f;
+float scrollSensitivity = 0.5f;
 
 // Timing
 float deltaTime = 0.0f;
@@ -211,7 +205,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     if (io.WantCaptureMouse) return;
 
     // Scroll wheel adjusts camera distance
-    cameraTargetDistance -= yoffset * cameraSettings.scrollSensitivity;
+    cameraTargetDistance -= yoffset * scrollSensitivity;
     if (cameraTargetDistance < 3.0f) cameraTargetDistance = 3.0f;
     if (cameraTargetDistance > 15.0f) cameraTargetDistance = 15.0f;
     updateCamera();
@@ -331,7 +325,7 @@ void processInput(GLFWwindow* window) {
     if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
         static bool keyPressed = false;
         if (!keyPressed) {
-            cameraSettings.showSettings = !cameraSettings.showSettings;
+            showSettings = !showSettings;
             keyPressed = true;
         }
     }
@@ -547,37 +541,33 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
     }
 }
 
-// ImGui functions for camera settings
-void updateCameraFromSettings() {
-    cameraTargetDistance = cameraSettings.distance;
-    cameraTargetHeight = cameraSettings.height;
-    cameraTargetAngle = cameraSettings.angle;
-    cameraSmoothTime = cameraSettings.smoothTime;
-    mouseSensitivity = cameraSettings.mouseSensitivity;
-    updateCamera();
-}
 
 void showCameraSettingsWindow() {
-    if (!cameraSettings.showSettings) return;
+    if (!showSettings) return;
 
-    ImGui::Begin("Camera Settings", &cameraSettings.showSettings, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::Begin("Camera Settings", &showSettings, ImGuiWindowFlags_AlwaysAutoResize);
 
-    if (ImGui::CollapsingHeader("Camera Position", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool changed = false;
-        changed |= ImGui::SliderFloat("Distance", &cameraSettings.distance, 3.0f, 15.0f);
-        changed |= ImGui::SliderFloat("Height", &cameraSettings.height, 1.0f, 8.0f);
-        changed |= ImGui::SliderAngle("Angle", &cameraSettings.angle, -180.0f, 180.0f);
-
-        if (changed) {
-            updateCameraFromSettings();
-        }
+    if (ImGui::CollapsingHeader("Camera Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Camera parameters
+        ImGui::SliderFloat("Camera Distance", &cameraTargetDistance, 3.0f, 15.0f);
+        ImGui::SliderFloat("Camera Height", &cameraTargetHeight, 1.0f, 8.0f);
+        ImGui::SliderAngle("Camera Angle", &cameraTargetAngle, -180.0f, 180.0f);
     }
 
     if (ImGui::CollapsingHeader("Camera Behavior", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool changed = false;
-        changed |= ImGui::SliderFloat("Smooth Time", &cameraSettings.smoothTime, 0.01f, 0.5f);
-        changed |= ImGui::SliderFloat("Mouse Sensitivity", &cameraSettings.mouseSensitivity, 0.01f, 1.0f);
-        changed |= ImGui::SliderFloat("Scroll Sensitivity", &cameraSettings.scrollSensitivity, 0.1f, 2.0f);
+
+        // Sensitivity settings
+        ImGui::Separator();
+        ImGui::Text("Sensitivity");
+        ImGui::SliderFloat("Mouse Sensitivity", &mouseSensitivity, 0.01f, 1.0f);
+        ImGui::SliderFloat("Joystick Sensitivity", &joystickSensitivity, 0.1f, 5.0f);
+
+        // Smoothing settings
+        ImGui::Separator();
+        ImGui::Text("Smoothing");
+        ImGui::SliderFloat("Position Smooth Time", &positionSmoothTime, 0.01f, 0.5f);
+        ImGui::SliderFloat("Rotation Smooth Time", &rotationSmoothTime, 0.01f, 0.3f);
+        ImGui::SliderFloat("Camera Smooth Time", &cameraSmoothTime, 0.01f, 0.5f);
 
 
         // Reset buttons
@@ -600,11 +590,6 @@ void showCameraSettingsWindow() {
         if (ImGui::Button("Reset Player")) {
             playerTargetPos = glm::vec3(0.0f, 1.0f, 0.0f);
             playerPos = playerTargetPos;
-        }
-
-
-        if (changed) {
-            updateCameraFromSettings();
         }
     }
 
@@ -758,10 +743,6 @@ int main() {
     updateCamera();
     updateCameraVectors();
 
-    // Initialize camera settings
-    cameraSettings.distance = cameraDistance;
-    cameraSettings.height = cameraHeight;
-    cameraSettings.angle = cameraAngle;
 
     // Smooth damping velocity variables
     glm::vec3 playerPosVelocity = glm::vec3(0.0f);
