@@ -42,6 +42,17 @@ float cameraTargetHeight = cameraHeight;
 float cameraAngle = 0.0f;
 float cameraTargetAngle = cameraAngle;
 
+// Camera settings for ImGui
+struct CameraSettings {
+    float distance = 6.0f;
+    float height = 3.0f;
+    float angle = 0.0f;
+    float smoothTime = 0.1f;
+    float mouseSensitivity = 0.1f;
+    float scrollSensitivity = 0.5f;
+    bool showSettings = true;
+} cameraSettings;
+
 // Joystick properties
 bool joystickPresent = false;
 int joystickId = GLFW_JOYSTICK_1;
@@ -53,7 +64,6 @@ bool firstMouse = true;
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 float mouseSensitivity = 0.1f;
-bool mouseCaptured = false;  // Start with mouse visible for ImGui
 
 // Timing
 float deltaTime = 0.0f;
@@ -164,8 +174,9 @@ void updateCamera() {
 }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    // Check if ImGui wants to capture the mouse
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse || !mouseCaptured) return;
+    if (io.WantCaptureMouse) return;
 
     if (firstMouse) {
         lastX = xpos;
@@ -195,11 +206,12 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    // Check if ImGui wants to capture the mouse
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse || !mouseCaptured) return;
+    if (io.WantCaptureMouse) return;
 
     // Scroll wheel adjusts camera distance
-    cameraTargetDistance -= yoffset * 0.5f;
+    cameraTargetDistance -= yoffset * cameraSettings.scrollSensitivity;
     if (cameraTargetDistance < 3.0f) cameraTargetDistance = 3.0f;
     if (cameraTargetDistance > 15.0f) cameraTargetDistance = 15.0f;
     updateCamera();
@@ -312,53 +324,44 @@ void processJoystickInput() {
 }
 
 void processInput(GLFWwindow* window) {
-    ImGuiIO& io = ImGui::GetIO();
-
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
-    // Toggle mouse capture with Tab key
-    static bool tabPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
-        mouseCaptured = !mouseCaptured;
-        if (mouseCaptured) {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            firstMouse = true; // Reset mouse position for smooth transition
+    // Toggle ImGui settings window with F1
+    if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
+        static bool keyPressed = false;
+        if (!keyPressed) {
+            cameraSettings.showSettings = !cameraSettings.showSettings;
+            keyPressed = true;
         }
-        else {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
-        tabPressed = true;
     }
-    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
-        tabPressed = false;
+    else {
+        static bool keyPressed = false;
+        keyPressed = false;
     }
 
-    // Only process game input if ImGui isn't using keyboard AND mouse is captured
-    if (!io.WantCaptureKeyboard && mouseCaptured) {
-        // Reset player movement
-        glm::vec3 movement = glm::vec3(0.0f);
+    // Reset player movement
+    glm::vec3 movement = glm::vec3(0.0f);
 
-        // Player movement relative to camera direction using pre-calculated vectors
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            movement -= cameraForward;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            movement += cameraForward;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            movement -= cameraRight;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            movement += cameraRight;
+    // Player movement relative to camera direction using pre-calculated vectors
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        movement -= cameraForward;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        movement += cameraForward;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        movement -= cameraRight;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        movement += cameraRight;
 
-        // Normalize movement if diagonal to maintain consistent speed
-        if (glm::length(movement) > 0.0f) {
-            movement = glm::normalize(movement);
+    // Normalize movement if diagonal to maintain consistent speed
+    if (glm::length(movement) > 0.0f) {
+        movement = glm::normalize(movement);
 
-            // Update player rotation to face movement direction
-            playerRotationTarget = atan2(movement.x, movement.z);
+        // Update player rotation to face movement direction
+        playerRotationTarget = atan2(movement.x, movement.z);
 
-            // Apply movement with speed and delta time to target position
-            playerTargetPos += movement * playerSpeed * deltaTime;
-        }
+        // Apply movement with speed and delta time to target position
+        playerTargetPos += movement * playerSpeed * deltaTime;
     }
 
     // Simple ground collision for target position
@@ -366,7 +369,7 @@ void processInput(GLFWwindow* window) {
         playerTargetPos.y = playerRadius;
     }
 
-    // Process joystick input (always processed)
+    // Process joystick input
     processJoystickInput();
 
     updateCamera();
@@ -544,94 +547,100 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
     }
 }
 
-// Function to create ImGui camera settings window
-void createCameraSettingsWindow() {
-    ImGui::Begin("Camera Settings");
+// ImGui functions for camera settings
+void updateCameraFromSettings() {
+    cameraTargetDistance = cameraSettings.distance;
+    cameraTargetHeight = cameraSettings.height;
+    cameraTargetAngle = cameraSettings.angle;
+    cameraSmoothTime = cameraSettings.smoothTime;
+    mouseSensitivity = cameraSettings.mouseSensitivity;
+    updateCamera();
+}
 
-    ImGui::Text("Camera Controls");
-    ImGui::Separator();
+void showCameraSettingsWindow() {
+    if (!cameraSettings.showSettings) return;
 
-    // Camera parameters
-    ImGui::SliderFloat("Camera Distance", &cameraTargetDistance, 3.0f, 15.0f);
-    ImGui::SliderFloat("Camera Height", &cameraTargetHeight, 1.0f, 8.0f);
-    ImGui::SliderAngle("Camera Angle", &cameraTargetAngle, -180.0f, 180.0f);
+    ImGui::Begin("Camera Settings", &cameraSettings.showSettings, ImGuiWindowFlags_AlwaysAutoResize);
 
-    // Sensitivity settings
-    ImGui::Separator();
-    ImGui::Text("Sensitivity");
-    ImGui::SliderFloat("Mouse Sensitivity", &mouseSensitivity, 0.01f, 1.0f);
-    ImGui::SliderFloat("Joystick Sensitivity", &joystickSensitivity, 0.1f, 5.0f);
+    if (ImGui::CollapsingHeader("Camera Position", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool changed = false;
+        changed |= ImGui::SliderFloat("Distance", &cameraSettings.distance, 3.0f, 15.0f);
+        changed |= ImGui::SliderFloat("Height", &cameraSettings.height, 1.0f, 8.0f);
+        changed |= ImGui::SliderAngle("Angle", &cameraSettings.angle, -180.0f, 180.0f);
 
-    // Smoothing settings
-    ImGui::Separator();
-    ImGui::Text("Smoothing");
-    ImGui::SliderFloat("Position Smooth Time", &positionSmoothTime, 0.01f, 0.5f);
-    ImGui::SliderFloat("Rotation Smooth Time", &rotationSmoothTime, 0.01f, 0.3f);
-    ImGui::SliderFloat("Camera Smooth Time", &cameraSmoothTime, 0.01f, 0.5f);
-
-    // Mouse control status
-    ImGui::Separator();
-    ImGui::Text("Mouse Control (TAB to toggle)");
-    if (mouseCaptured) {
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mouse: CAPTURED (Game Control)");
-        ImGui::Text("Use mouse to look around");
-        ImGui::Text("Press TAB to release mouse for UI");
-    }
-    else {
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Mouse: RELEASED (UI Control)");
-        ImGui::Text("Use mouse to interact with UI");
-        ImGui::Text("Press TAB to capture mouse for game");
+        if (changed) {
+            updateCameraFromSettings();
+        }
     }
 
-    // Joystick settings
-    ImGui::Separator();
-    ImGui::Text("Joystick Settings");
-    ImGui::SliderFloat("Joystick Deadzone", &joystickDeadzone, 0.0f, 0.5f);
+    if (ImGui::CollapsingHeader("Camera Behavior", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool changed = false;
+        changed |= ImGui::SliderFloat("Smooth Time", &cameraSettings.smoothTime, 0.01f, 0.5f);
+        changed |= ImGui::SliderFloat("Mouse Sensitivity", &cameraSettings.mouseSensitivity, 0.01f, 1.0f);
+        changed |= ImGui::SliderFloat("Scroll Sensitivity", &cameraSettings.scrollSensitivity, 0.1f, 2.0f);
 
-    // Joystick status
-    if (joystickPresent) {
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Joystick Connected");
 
-        int axesCount;
-        glfwGetJoystickAxes(joystickId, &axesCount);
-        int buttonCount;
-        glfwGetJoystickButtons(joystickId, &buttonCount);
+        // Reset buttons
+        ImGui::Separator();
+        if (ImGui::Button("Reset Camera")) {
+            cameraTargetDistance = 6.0f;
+            cameraTargetHeight = 3.0f;
+            cameraTargetAngle = 0.0f;
+            cameraAngle = 0.0f;
+        }
 
-        ImGui::Text("Axes: %d, Buttons: %d", axesCount, buttonCount);
-    }
-    else {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "No Joystick Detected");
-    }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Smoothing")) {
+            positionSmoothTime = 0.1f;
+            rotationSmoothTime = 0.05f;
+            cameraSmoothTime = 0.1f;
+        }
 
-    // Reset buttons
-    ImGui::Separator();
-    if (ImGui::Button("Reset Camera")) {
-        cameraTargetDistance = 6.0f;
-        cameraTargetHeight = 3.0f;
-        cameraTargetAngle = 0.0f;
-        cameraAngle = 0.0f;
-    }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Player")) {
+            playerTargetPos = glm::vec3(0.0f, 1.0f, 0.0f);
+            playerPos = playerTargetPos;
+        }
 
-    ImGui::SameLine();
-    if (ImGui::Button("Reset Smoothing")) {
-        positionSmoothTime = 0.1f;
-        rotationSmoothTime = 0.05f;
-        cameraSmoothTime = 0.1f;
-    }
 
-    ImGui::SameLine();
-    if (ImGui::Button("Reset Player")) {
-        playerTargetPos = glm::vec3(0.0f, 1.0f, 0.0f);
-        playerPos = playerTargetPos;
+        if (changed) {
+            updateCameraFromSettings();
+        }
     }
 
-    // Display current values
-    ImGui::Separator();
-    ImGui::Text("Current Values");
-    ImGui::Text("Player Pos: (%.2f, %.2f, %.2f)", playerPos.x, playerPos.y, playerPos.z);
-    ImGui::Text("Camera Pos: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y, cameraPos.z);
-    ImGui::Text("Player Rotation: %.2f", playerRotation);
+    if (ImGui::CollapsingHeader("Player Info")) {
+        ImGui::Text("Position: (%.2f, %.2f, %.2f)", playerPos.x, playerPos.y, playerPos.z);
+        ImGui::Text("Rotation: %.2f rad", playerRotation);
+        ImGui::Text("Camera Pos: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y, cameraPos.z);
+    }
 
+    if (ImGui::CollapsingHeader("Joystick settings")) {
+        ImGui::SliderFloat("Joystick Deadzone", &joystickDeadzone, 0.0f, 0.5f);
+
+        // Joystick status
+        if (joystickPresent) {
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Joystick Connected");
+
+            int axesCount;
+            glfwGetJoystickAxes(joystickId, &axesCount);
+            int buttonCount;
+            glfwGetJoystickButtons(joystickId, &buttonCount);
+
+            ImGui::Text("Axes: %d, Buttons: %d", axesCount, buttonCount);
+        }
+        else {
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "No Joystick Detected");
+        }
+
+    }
+
+    if (ImGui::CollapsingHeader("Controls")) {
+        ImGui::Text("WASD: Move player");
+        ImGui::Text("Mouse: Look around");
+        ImGui::Text("Scroll: Zoom in/out");
+        ImGui::Text("F1: Toggle this window");
+        ImGui::Text("ESC: Exit");
+    }
     ImGui::End();
 }
 
@@ -639,10 +648,10 @@ int main() {
     std::cout << "Sphere Controller with Joystick Support and ImGui" << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
-    std::cout << "  - Mouse: Look around (TAB to capture/release mouse)" << std::endl;
+    std::cout << "  - Mouse: Look around" << std::endl;
     std::cout << "  - Scroll: Zoom in/out" << std::endl;
+    std::cout << "  - F1: Toggle camera settings" << std::endl;
     std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
-    std::cout << "  - TAB: Toggle mouse capture" << std::endl;
     std::cout << "  - ESC: Exit" << std::endl;
 
     if (!glfwInit()) {
@@ -670,8 +679,8 @@ int main() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
 
-    // Start with mouse visible for ImGui
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    // Capture the mouse
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
@@ -685,7 +694,7 @@ int main() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Setup ImGui style
     ImGui::StyleColorsDark();
@@ -749,6 +758,11 @@ int main() {
     updateCamera();
     updateCameraVectors();
 
+    // Initialize camera settings
+    cameraSettings.distance = cameraDistance;
+    cameraSettings.height = cameraHeight;
+    cameraSettings.angle = cameraAngle;
+
     // Smooth damping velocity variables
     glm::vec3 playerPosVelocity = glm::vec3(0.0f);
     float playerRotationVelocity = 0.0f;
@@ -794,8 +808,8 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Create camera settings window
-        createCameraSettingsWindow();
+        // Show camera settings window
+        showCameraSettingsWindow();
 
         // Rendering
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
