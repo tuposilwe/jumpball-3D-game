@@ -16,6 +16,10 @@
 unsigned int SCR_WIDTH = 800;
 unsigned int SCR_HEIGHT = 600;
 
+// World boundaries
+const float GROUND_SIZE = 20.0f;
+const float WORLD_BOUNDARY = GROUND_SIZE / 2.0f + 1.0f; // Slightly smaller than ground for visual margin
+
 // Player properties
 glm::vec3 playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
 glm::vec3 playerTargetPos = playerPos;
@@ -119,6 +123,19 @@ void main()
     FragColor = vec4(result, 1.0);
 }
 )";
+
+// Boundary checking function
+void enforceWorldBoundaries(glm::vec3& position) {
+    float boundary = WORLD_BOUNDARY - playerRadius;
+    // X boundary
+    position.x = glm::clamp(position.x, -boundary, boundary);
+
+    // Z boundary 
+    position.z = glm::clamp(position.z, -boundary, boundary);
+
+    // Y boundary (ground collision)
+    position.y = glm::max(position.y, playerRadius);
+}
 
 // Smooth damping functions
 glm::vec3 smoothDamp(glm::vec3 current, glm::vec3 target, glm::vec3& currentVelocity, float smoothTime, float deltaTime) {
@@ -263,6 +280,9 @@ void processJoystickInput() {
 
         // Apply movement with speed and delta time to target position
         playerTargetPos += movement * playerSpeed * joystickSensitivity * deltaTime;
+
+        // Enforce boundaries on target position
+        enforceWorldBoundaries(playerTargetPos);
     }
 
     // Process camera control - try multiple methods
@@ -321,16 +341,16 @@ void processInput(GLFWwindow* window) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
+    static bool keyPressed = false;
     // Toggle ImGui settings window with F1
     if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
-        static bool keyPressed = false;
+       
         if (!keyPressed) {
             showSettings = !showSettings;
             keyPressed = true;
         }
     }
     else {
-        static bool keyPressed = false;
         keyPressed = false;
     }
 
@@ -356,11 +376,9 @@ void processInput(GLFWwindow* window) {
 
         // Apply movement with speed and delta time to target position
         playerTargetPos += movement * playerSpeed * deltaTime;
-    }
 
-    // Simple ground collision for target position
-    if (playerTargetPos.y < playerRadius) {
-        playerTargetPos.y = playerRadius;
+        // Enforce boundaries on target position
+        enforceWorldBoundaries(playerTargetPos);
     }
 
     // Process joystick input
@@ -494,7 +512,7 @@ void generateSphere(float radius, int sectors, int stacks, std::vector<float>& v
 
 // Function to generate a simple ground plane with grid
 void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
-    const float size = 20.0f;
+    const float size = GROUND_SIZE;
     const int divisions = 20;
     const float step = size / divisions;
 
@@ -597,6 +615,19 @@ void showCameraSettingsWindow() {
         ImGui::Text("Position: (%.2f, %.2f, %.2f)", playerPos.x, playerPos.y, playerPos.z);
         ImGui::Text("Rotation: %.2f rad", playerRotation);
         ImGui::Text("Camera Pos: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y, cameraPos.z);
+
+        // Boundary info
+        ImGui::Separator();
+        ImGui::Text("World Boundaries: ±%.1f", WORLD_BOUNDARY);
+        bool atBoundaryX = (playerPos.x >= WORLD_BOUNDARY - playerRadius - 0.1f) || (playerPos.x <= -WORLD_BOUNDARY + playerRadius + 0.1f);
+        bool atBoundaryZ = (playerPos.z >= WORLD_BOUNDARY - playerRadius - 0.1f) || (playerPos.z <= -WORLD_BOUNDARY + playerRadius + 0.1f);
+
+        if (atBoundaryX || atBoundaryZ) {
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "At World Boundary");
+        }
+        else {
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Within Boundaries");
+        }
     }
 
     if (ImGui::CollapsingHeader("Joystick settings")) {
@@ -619,12 +650,13 @@ void showCameraSettingsWindow() {
 
     }
 
-    if (ImGui::CollapsingHeader("Controls")) {
+    if (ImGui::CollapsingHeader("Help")) {
         ImGui::Text("WASD: Move player");
         ImGui::Text("Mouse: Look around");
         ImGui::Text("Scroll: Zoom in/out");
         ImGui::Text("F1: Toggle this window");
         ImGui::Text("ESC: Exit");
+        ImGui::Text("World Boundaries: Player cannot leave the ground area");
     }
     ImGui::End();
 }
@@ -638,6 +670,7 @@ int main() {
     std::cout << "  - F1: Toggle camera settings" << std::endl;
     std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
     std::cout << "  - ESC: Exit" << std::endl;
+    std::cout << "World Boundaries: Player is confined to a " << GROUND_SIZE << "x" << GROUND_SIZE << " area" << std::endl;
 
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW" << std::endl;
