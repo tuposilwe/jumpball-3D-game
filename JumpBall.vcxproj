@@ -71,7 +71,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>C:\sdl\SDL2-2.32.8\include;C:\sdl\SDL2_mixer-2.8.0\include;C:\GL\GLAD\include;C:\GL\glfw-3.4.bin.WIN64\include;C:\GL\freetype\include;C:\bullet\src;C:\Program Files\Assimp\include;$(IncludePath)</IncludePath>
+    <IncludePath>C:\sdl\SDL2-2.32.8\include;C:\sdl\SDL2_mixer-2.8.0\include;C:\GL\GLAD\include;C:\GL\glfw-3.4.bin.WIN64\include;C:\GL\freetype\include;C:\bullet\src;C:\Program Files\Assimp\include;C:\GL\imgui\include;$(IncludePath)</IncludePath>
     <LibraryPath>C:\sdl\SDL2-2.32.8\lib\x64;C:\sdl\SDL2_mixer-2.8.0\lib\x64;C:\GL\glfw-3.4.bin.WIN64\lib-vc2022;C:\GL\freetype\lib;C:\bullet\lib\Debug;C:\Program Files\Assimp\lib\x64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -139,7 +139,25 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\..\..\..\GL\GLAD\src\glad.c" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_demo.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_draw.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_impl_glfw.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_impl_opengl3.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_tables.cpp" />
+    <ClCompile Include="..\..\..\..\..\GL\imgui\include\imgui_widgets.cpp" />
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imconfig.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imgui.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imgui_impl_glfw.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imgui_impl_opengl3.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imgui_impl_opengl3_loader.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imgui_internal.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imstb_rectpack.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imstb_textedit.h" />
+    <ClInclude Include="..\..\..\..\..\GL\imgui\include\imstb_truetype.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
