@@ -27,6 +27,44 @@ float playerSpeed = 8.0f;
 float playerRadius = 1.0f;
 float playerRotation = 0.0f;
 float playerRotationTarget = 0.0f;
+bool playerAlive = true;
+float playerRespawnTimer = 0.0f;
+const float PLAYER_RESPAWN_TIME = 3.0f;
+
+// Egg properties
+struct Egg {
+    glm::vec3 position;
+    bool active;
+    float radius;
+    glm::vec3 color;
+    float spawnTime;
+    float lifeTimer;
+    float scale;
+    float pulseFactor;
+    bool spawning;
+    bool despawning;
+    bool isPoison; // New: distinguishes between collectible and poison eggs
+};
+
+std::vector<Egg> eggs;
+float eggSpawnTimer = 0.0f;
+const float EGG_SPAWN_INTERVAL = 4.0f;
+const float EGG_LIFESPAN = 4.0f;
+const float EGG_RADIUS = 0.5f;
+const int MAX_EGGS = 10;
+
+// Poison egg properties
+float poisonEggSpawnTimer = 0.0f;
+const float POISON_EGG_SPAWN_INTERVAL = 6.0f;
+const float POISON_EGG_LIFESPAN = 3.0f;
+const float POISON_EGG_RADIUS = 0.6f;
+const int MAX_POISON_EGGS = 5;
+
+// Animation properties
+const float SPAWN_ANIMATION_DURATION = 1.0f;
+const float DESPAWN_ANIMATION_DURATION = 1.0f;
+const float PULSE_SPEED = 3.0f;
+const float POISON_PULSE_SPEED = 5.0f; // Faster pulse for poison eggs
 
 // Smooth damping properties
 float positionSmoothTime = 0.1f;
@@ -49,6 +87,10 @@ float cameraTargetAngle = cameraAngle;
 // Camera settings for ImGui
 bool showSettings = true;
 
+// Game state
+int score = 0;
+int lives = 3;
+bool gameOver = false;
 
 // Joystick properties
 bool joystickPresent = false;
@@ -164,6 +206,199 @@ float smoothDamp(float current, float target, float& currentVelocity, float smoo
     return output;
 }
 
+// Generate random position for eggs
+glm::vec3 generateRandomEggPosition() {
+    float boundary = WORLD_BOUNDARY - EGG_RADIUS - 1.0f; // Keep eggs away from edges
+    float x = ((float)rand() / RAND_MAX) * 2.0f * boundary - boundary;
+    float z = ((float)rand() / RAND_MAX) * 2.0f * boundary - boundary;
+    return glm::vec3(x, EGG_RADIUS, z);
+}
+
+// Generate random color for eggs
+glm::vec3 generateRandomEggColor() {
+    return glm::vec3(
+        (float)rand() / RAND_MAX * 0.5f + 0.5f, // R: 0.5-1.0
+        (float)rand() / RAND_MAX * 0.5f + 0.5f, // G: 0.5-1.0
+        (float)rand() / RAND_MAX * 0.5f + 0.5f  // B: 0.5-1.0
+    );
+}
+
+// Spawn a new egg
+void spawnEgg() {
+    if (eggs.size() < MAX_EGGS) {
+        Egg newEgg;
+        newEgg.position = generateRandomEggPosition();
+        newEgg.active = true;
+        newEgg.radius = EGG_RADIUS;
+        newEgg.color = generateRandomEggColor();
+        newEgg.spawnTime = glfwGetTime();
+        newEgg.lifeTimer = EGG_LIFESPAN;
+        newEgg.scale = 0.0f; // Start at scale 0 for spawn animation
+        newEgg.pulseFactor = 0.0f;
+        newEgg.spawning = true;
+        newEgg.despawning = false;
+        newEgg.isPoison = false;
+        eggs.push_back(newEgg);
+        std::cout << "Egg spawned at (" << newEgg.position.x << ", " << newEgg.position.z << ")" << std::endl;
+    }
+}
+
+// Spawn a poison egg
+void spawnPoisonEgg() {
+    int poisonEggCount = 0;
+    for (const auto& egg : eggs) {
+        if (egg.isPoison && egg.active) {
+            poisonEggCount++;
+        }
+    }
+
+    if (poisonEggCount < MAX_POISON_EGGS) {
+        Egg poisonEgg;
+        poisonEgg.position = generateRandomEggPosition();
+        poisonEgg.active = true;
+        poisonEgg.radius = POISON_EGG_RADIUS;
+        poisonEgg.color = glm::vec3(0.6f, 0.2f, 0.8f);
+        poisonEgg.spawnTime = glfwGetTime();
+        poisonEgg.lifeTimer = POISON_EGG_LIFESPAN;
+        poisonEgg.scale = 0.0f;
+        poisonEgg.pulseFactor = 0.0f;
+        poisonEgg.spawning = true;
+        poisonEgg.despawning = false;
+        poisonEgg.isPoison = true;
+        eggs.push_back(poisonEgg);
+        std::cout << "POISON EGG spawned at (" << poisonEgg.position.x << ", " << poisonEgg.position.z << ")" << std::endl;
+    }
+}
+
+// Player death function
+void killPlayer() {
+    if (playerAlive) {
+        playerAlive = false;
+        lives--;
+        playerRespawnTimer = PLAYER_RESPAWN_TIME;
+
+        if (lives <= 0) {
+            gameOver = true;
+            std::cout << "GAME OVER! Final Score: " << score << std::endl;
+        }
+        else {
+            std::cout << "Player died! Lives remaining: " << lives << std::endl;
+        }
+    }
+}
+
+// Respawn player
+void respawnPlayer() {
+    playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
+    playerTargetPos = playerPos;
+    playerAlive = true;
+    std::cout << "Player respawned!" << std::endl;
+}
+
+// Update egg animations and lifecycle
+void updateEggs() {
+    // Update spawn timers
+    eggSpawnTimer += deltaTime;
+    poisonEggSpawnTimer += deltaTime;
+
+    // Spawn new egg if timer reaches interval
+    if (eggSpawnTimer >= EGG_SPAWN_INTERVAL) {
+        spawnEgg();
+        eggSpawnTimer = 0.0f;
+    }
+
+    // Spawn poison egg if timer reaches interval
+    if (poisonEggSpawnTimer >= POISON_EGG_SPAWN_INTERVAL) {
+        spawnPoisonEgg();
+        poisonEggSpawnTimer = 0.0f;
+    }
+
+    // Update all eggs
+    for (auto& egg : eggs) {
+        if (egg.active) {
+            // Update life timer
+            egg.lifeTimer -= deltaTime;
+
+            // Update pulse animation (continuous pulsing)
+            float pulseSpeed = egg.isPoison ? POISON_PULSE_SPEED : PULSE_SPEED;
+            egg.pulseFactor = sin(glfwGetTime() * pulseSpeed) * 0.1f + 1.0f; // Pulse between 0.9 and 1.1
+
+            // Handle spawn animation
+            if (egg.spawning) {
+                float spawnProgress = 1.0f - (egg.lifeTimer / (egg.isPoison ? POISON_EGG_LIFESPAN : EGG_LIFESPAN));
+                float spawnDuration = egg.isPoison ? SPAWN_ANIMATION_DURATION * 0.7f : SPAWN_ANIMATION_DURATION;
+                if (spawnProgress < spawnDuration / (egg.isPoison ? POISON_EGG_LIFESPAN : EGG_LIFESPAN)) {
+                    // Scale up during spawn animation
+                    egg.scale = spawnProgress * ((egg.isPoison ? POISON_EGG_LIFESPAN : EGG_LIFESPAN) / spawnDuration);
+                }
+                else {
+                    // Spawn animation complete
+                    egg.scale = 1.0f;
+                    egg.spawning = false;
+                }
+            }
+
+            // Handle despawn animation
+            float despawnDuration = egg.isPoison ? DESPAWN_ANIMATION_DURATION * 0.7f : DESPAWN_ANIMATION_DURATION;
+            if (egg.lifeTimer <= despawnDuration && !egg.despawning) {
+                egg.despawning = true;
+            }
+
+            if (egg.despawning) {
+                // Scale down during despawn animation
+                float despawnProgress = egg.lifeTimer / despawnDuration;
+                egg.scale = despawnProgress;
+            }
+
+            // Deactivate egg if lifespan is over
+            if (egg.lifeTimer <= 0.0f) {
+                egg.active = false;
+                if (egg.isPoison) {
+                    std::cout << "Poison egg despawned!" << std::endl;
+                }
+                else {
+                    std::cout << "Egg despawned!" << std::endl;
+                }
+            }
+
+            // Check for collisions with player (only if player is alive)
+            if (playerAlive) {
+                float distance = glm::distance(playerPos, egg.position);
+                float collisionDistance = playerRadius + egg.radius * egg.scale;
+
+                if (distance < collisionDistance) {
+                    if (egg.isPoison) {
+                        // Poison egg - kill player
+                        killPlayer();
+                        egg.active = false;
+                        std::cout << "Player hit poison egg! Lives: " << lives << std::endl;
+                    }
+                    else {
+                        // Regular egg - collect and score
+                        egg.active = false;
+                        score += 10;
+                        std::cout << "Egg collected! Score: " << score << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove inactive eggs
+    eggs.erase(std::remove_if(eggs.begin(), eggs.end(),
+        [](const Egg& egg) { return !egg.active; }), eggs.end());
+}
+
+// Update player respawn
+void updatePlayer() {
+    if (!playerAlive && !gameOver) {
+        playerRespawnTimer -= deltaTime;
+        if (playerRespawnTimer <= 0.0f) {
+            respawnPlayer();
+        }
+    }
+}
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     SCR_WIDTH = width;
     SCR_HEIGHT = height;
@@ -261,8 +496,8 @@ void processJoystickInput() {
         if (fabs(cameraY) < joystickDeadzone) cameraY = 0.0f;
     }
 
-    // Process movement with left stick
-    if (fabs(leftX) > 0.0f || fabs(leftY) > 0.0f) {
+    // Process movement with left stick (only if player is alive)
+    if (playerAlive && (fabs(leftX) > 0.0f || fabs(leftY) > 0.0f)) {
         glm::vec3 movement = glm::vec3(0.0f);
 
         // Convert joystick input to world space movement relative to camera
@@ -344,7 +579,7 @@ void processInput(GLFWwindow* window) {
     static bool keyPressed = false;
     // Toggle ImGui settings window with F1
     if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
-       
+
         if (!keyPressed) {
             showSettings = !showSettings;
             keyPressed = true;
@@ -354,31 +589,46 @@ void processInput(GLFWwindow* window) {
         keyPressed = false;
     }
 
-    // Reset player movement
+    // Reset game with R key
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && gameOver) {
+        // Reset game state
+        score = 0;
+        lives = 3;
+        playerAlive = true;
+        gameOver = false;
+        eggs.clear();
+        playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
+        playerTargetPos = playerPos;
+        std::cout << "Game reset! Starting over..." << std::endl;
+    }
+
+    // Reset player movement (only if player is alive)
     glm::vec3 movement = glm::vec3(0.0f);
 
-    // Player movement relative to camera direction using pre-calculated vectors
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        movement -= cameraForward;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        movement += cameraForward;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        movement -= cameraRight;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        movement += cameraRight;
+    if (playerAlive) {
+        // Player movement relative to camera direction using pre-calculated vectors
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            movement -= cameraForward;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            movement += cameraForward;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            movement -= cameraRight;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            movement += cameraRight;
 
-    // Normalize movement if diagonal to maintain consistent speed
-    if (glm::length(movement) > 0.0f) {
-        movement = glm::normalize(movement);
+        // Normalize movement if diagonal to maintain consistent speed
+        if (glm::length(movement) > 0.0f) {
+            movement = glm::normalize(movement);
 
-        // Update player rotation to face movement direction
-        playerRotationTarget = atan2(movement.x, movement.z);
+            // Update player rotation to face movement direction
+            playerRotationTarget = atan2(movement.x, movement.z);
 
-        // Apply movement with speed and delta time to target position
-        playerTargetPos += movement * playerSpeed * deltaTime;
+            // Apply movement with speed and delta time to target position
+            playerTargetPos += movement * playerSpeed * deltaTime;
 
-        // Enforce boundaries on target position
-        enforceWorldBoundaries(playerTargetPos);
+            // Enforce boundaries on target position
+            enforceWorldBoundaries(playerTargetPos);
+        }
     }
 
     // Process joystick input
@@ -559,11 +809,24 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
     }
 }
 
-
 void showCameraSettingsWindow() {
     if (!showSettings) return;
 
-    ImGui::Begin("Camera Settings", &showSettings, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::Begin("Game Settings", &showSettings, ImGuiWindowFlags_AlwaysAutoResize);
+
+    // Game status
+    ImGui::TextColored(ImVec4(1, 1, 0, 1), "SCORE: %d", score);
+    ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "LIVES: %d", lives);
+
+    if (!playerAlive && !gameOver) {
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "RESPAWNING IN: %.1f", playerRespawnTimer);
+    }
+
+    if (gameOver) {
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "GAME OVER! Press R to restart");
+    }
+
+    ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Camera Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Camera parameters
@@ -586,7 +849,6 @@ void showCameraSettingsWindow() {
         ImGui::SliderFloat("Position Smooth Time", &positionSmoothTime, 0.01f, 0.5f);
         ImGui::SliderFloat("Rotation Smooth Time", &rotationSmoothTime, 0.01f, 0.3f);
         ImGui::SliderFloat("Camera Smooth Time", &cameraSmoothTime, 0.01f, 0.5f);
-
 
         // Reset buttons
         ImGui::Separator();
@@ -630,6 +892,34 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Egg System")) {
+        int regularEggCount = 0;
+        int poisonEggCount = 0;
+        for (const auto& egg : eggs) {
+            if (egg.isPoison) poisonEggCount++;
+            else regularEggCount++;
+        }
+
+        ImGui::Text("Regular Eggs: %d/%d", regularEggCount, MAX_EGGS);
+        ImGui::Text("Poison Eggs: %d/%d", poisonEggCount, MAX_POISON_EGGS);
+        ImGui::Text("Next Regular Egg: %.1f seconds", EGG_SPAWN_INTERVAL - eggSpawnTimer);
+        ImGui::Text("Next Poison Egg: %.1f seconds", POISON_EGG_SPAWN_INTERVAL - poisonEggSpawnTimer);
+
+        if (ImGui::Button("Spawn Regular Egg")) {
+            spawnEgg();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Spawn Poison Egg")) {
+            spawnPoisonEgg();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear All Eggs")) {
+            eggs.clear();
+        }
+    }
+
     if (ImGui::CollapsingHeader("Joystick settings")) {
         ImGui::SliderFloat("Joystick Deadzone", &joystickDeadzone, 0.0f, 0.5f);
 
@@ -647,7 +937,6 @@ void showCameraSettingsWindow() {
         else {
             ImGui::TextColored(ImVec4(1, 0, 0, 1), "No Joystick Detected");
         }
-
     }
 
     if (ImGui::CollapsingHeader("Help")) {
@@ -656,7 +945,11 @@ void showCameraSettingsWindow() {
         ImGui::Text("Scroll: Zoom in/out");
         ImGui::Text("F1: Toggle this window");
         ImGui::Text("ESC: Exit");
+        ImGui::Text("R: Restart game (when game over)");
         ImGui::Text("World Boundaries: Player cannot leave the ground area");
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Green Eggs: +10 points");
+        ImGui::TextColored(ImVec4(1, 0, 1, 1), "Purple/Green Poison Eggs: -1 life");
+        ImGui::Text("Collect good eggs, avoid poison eggs!");
     }
     ImGui::End();
 }
@@ -670,7 +963,15 @@ int main() {
     std::cout << "  - F1: Toggle camera settings" << std::endl;
     std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
     std::cout << "  - ESC: Exit" << std::endl;
+    std::cout << "  - R: Restart game when game over" << std::endl;
     std::cout << "World Boundaries: Player is confined to a " << GROUND_SIZE << "x" << GROUND_SIZE << " area" << std::endl;
+    std::cout << "Egg System:" << std::endl;
+    std::cout << "  - Regular eggs (various colors): +10 points, spawn every 15 seconds" << std::endl;
+    std::cout << "  - Poison eggs (purple/green): -1 life, spawn every 10 seconds" << std::endl;
+    std::cout << "  - You have 3 lives. Game over when all lives are lost." << std::endl;
+
+    // Seed random number generator
+    srand(static_cast<unsigned int>(time(nullptr)));
 
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW" << std::endl;
@@ -685,7 +986,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Sphere Controller with ImGui Camera Settings", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Avoid the Poison!", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -727,17 +1028,27 @@ int main() {
     // Create shader program
     unsigned int shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
 
-    // Generate sphere geometry
+    // Generate sphere geometry for player
     std::vector<float> sphereVertices;
     std::vector<unsigned int> sphereIndices;
     generateSphere(playerRadius, 36, 18, sphereVertices, sphereIndices);
+
+    // Generate sphere geometry for eggs (smaller spheres)
+    std::vector<float> eggVertices;
+    std::vector<unsigned int> eggIndices;
+    generateSphere(EGG_RADIUS, 24, 12, eggVertices, eggIndices);
+
+    // Generate sphere geometry for poison eggs (slightly larger)
+    std::vector<float> poisonEggVertices;
+    std::vector<unsigned int> poisonEggIndices;
+    generateSphere(POISON_EGG_RADIUS, 24, 12, poisonEggVertices, poisonEggIndices);
 
     // Generate ground geometry
     std::vector<float> groundVertices;
     std::vector<unsigned int> groundIndices;
     generateGround(groundVertices, groundIndices);
 
-    // Set up sphere VAO, VBO, EBO
+    // Set up player sphere VAO, VBO, EBO
     unsigned int sphereVAO, sphereVBO, sphereEBO;
     glGenVertexArrays(1, &sphereVAO);
     glGenBuffers(1, &sphereVBO);
@@ -748,6 +1059,38 @@ int main() {
     glBufferData(GL_ARRAY_BUFFER, sphereVertices.size() * sizeof(float), sphereVertices.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sphereIndices.size() * sizeof(unsigned int), sphereIndices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // Set up egg sphere VAO, VBO, EBO
+    unsigned int eggVAO, eggVBO, eggEBO;
+    glGenVertexArrays(1, &eggVAO);
+    glGenBuffers(1, &eggVBO);
+    glGenBuffers(1, &eggEBO);
+
+    glBindVertexArray(eggVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, eggVBO);
+    glBufferData(GL_ARRAY_BUFFER, eggVertices.size() * sizeof(float), eggVertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, eggEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, eggIndices.size() * sizeof(unsigned int), eggIndices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // Set up poison egg sphere VAO, VBO, EBO
+    unsigned int poisonEggVAO, poisonEggVBO, poisonEggEBO;
+    glGenVertexArrays(1, &poisonEggVAO);
+    glGenBuffers(1, &poisonEggVBO);
+    glGenBuffers(1, &poisonEggEBO);
+
+    glBindVertexArray(poisonEggVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, poisonEggVBO);
+    glBufferData(GL_ARRAY_BUFFER, poisonEggVertices.size() * sizeof(float), poisonEggVertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, poisonEggEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, poisonEggIndices.size() * sizeof(unsigned int), poisonEggIndices.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
@@ -776,7 +1119,6 @@ int main() {
     updateCamera();
     updateCameraVectors();
 
-
     // Smooth damping velocity variables
     glm::vec3 playerPosVelocity = glm::vec3(0.0f);
     float playerRotationVelocity = 0.0f;
@@ -800,11 +1142,17 @@ int main() {
 
         processInput(window);
 
-        // Apply smooth damping to player position
-        playerPos = smoothDamp(playerPos, playerTargetPos, playerPosVelocity, positionSmoothTime, deltaTime);
+        // Update egg system
+        updateEggs();
 
-        // Apply smooth damping to player rotation
-        playerRotation = smoothDamp(playerRotation, playerRotationTarget, playerRotationVelocity, rotationSmoothTime, deltaTime);
+        // Update player respawn
+        updatePlayer();
+
+        // Apply smooth damping to player position (only if alive)
+        if (playerAlive) {
+            playerPos = smoothDamp(playerPos, playerTargetPos, playerPosVelocity, positionSmoothTime, deltaTime);
+            playerRotation = smoothDamp(playerRotation, playerRotationTarget, playerRotationVelocity, rotationSmoothTime, deltaTime);
+        }
 
         // Apply smooth damping to camera parameters
         cameraDistance = smoothDamp(cameraDistance, cameraTargetDistance, cameraDistanceVelocity, cameraSmoothTime, deltaTime);
@@ -848,14 +1196,53 @@ int main() {
         glBindVertexArray(groundVAO);
         glDrawElements(GL_TRIANGLES, groundIndices.size(), GL_UNSIGNED_INT, 0);
 
-        // Render player sphere
-        glm::mat4 sphereModel = glm::mat4(1.0f);
-        sphereModel = glm::translate(sphereModel, playerPos);
-        sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
-        glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(glm::vec3(0.8f, 0.2f, 0.2f)));
-        glBindVertexArray(sphereVAO);
-        glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+        // Render player sphere (only if alive)
+        if (playerAlive) {
+            glm::mat4 sphereModel = glm::mat4(1.0f);
+            sphereModel = glm::translate(sphereModel, playerPos);
+            sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
+
+            // Make player flash red when recently respawned
+            glm::vec3 playerColor = glm::vec3(0.8f, 0.2f, 0.2f);
+            if (playerRespawnTimer > PLAYER_RESPAWN_TIME - 1.0f) {
+                // Flash during first second after respawn
+                float flash = sin(glfwGetTime() * 10.0f) * 0.5f + 0.5f;
+                playerColor = glm::mix(playerColor, glm::vec3(1.0f, 1.0f, 1.0f), flash);
+            }
+
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
+            glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(playerColor));
+            glBindVertexArray(sphereVAO);
+            glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+        }
+
+        // Render eggs with animations
+        for (const auto& egg : eggs) {
+            if (egg.active) {
+                glm::mat4 eggModel = glm::mat4(1.0f);
+                eggModel = glm::translate(eggModel, egg.position);
+
+                // Apply scale animation
+                float finalScale = egg.scale * egg.pulseFactor;
+                eggModel = glm::scale(eggModel, glm::vec3(finalScale));
+
+                glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(eggModel));
+
+                // Choose the appropriate VAO based on egg type
+                if (egg.isPoison) {
+                    glBindVertexArray(poisonEggVAO);
+                    // Make poison eggs more vibrant
+                    glm::vec3 finalColor = egg.color * 1.2f;
+                    glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(finalColor));
+                }
+                else {
+                    glBindVertexArray(eggVAO);
+                    glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(egg.color));
+                }
+
+                glDrawElements(GL_TRIANGLES, eggIndices.size(), GL_UNSIGNED_INT, 0);
+            }
+        }
 
         // Render ImGui
         ImGui::Render();
@@ -871,15 +1258,21 @@ int main() {
     ImGui::DestroyContext();
 
     glDeleteVertexArrays(1, &sphereVAO);
+    glDeleteVertexArrays(1, &eggVAO);
+    glDeleteVertexArrays(1, &poisonEggVAO);
     glDeleteVertexArrays(1, &groundVAO);
     glDeleteBuffers(1, &sphereVBO);
+    glDeleteBuffers(1, &eggVBO);
+    glDeleteBuffers(1, &poisonEggVBO);
     glDeleteBuffers(1, &groundVBO);
     glDeleteBuffers(1, &sphereEBO);
+    glDeleteBuffers(1, &eggEBO);
+    glDeleteBuffers(1, &poisonEggEBO);
     glDeleteBuffers(1, &groundEBO);
     glDeleteProgram(shaderProgram);
 
     glfwTerminate();
 
-    std::cout << "Application terminated successfully!" << std::endl;
+    std::cout << "Application terminated successfully! Final Score: " << score << std::endl;
     return 0;
 }
