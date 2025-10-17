@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -92,6 +93,12 @@ int score = 0;
 int lives = 3;
 bool gameOver = false;
 
+// Fruit Ninja style miss system
+int missedEggs = 0;
+const int MAX_MISSES = 3;
+std::vector<glm::vec3> missIndicators; // x,z for position, y for timer
+float missIndicatorDuration = 1.5f;
+
 // Joystick properties
 bool joystickPresent = false;
 int joystickId = GLFW_JOYSTICK_1;
@@ -166,6 +173,33 @@ void main()
 }
 )";
 
+// Miss indicator shader (simple unlit shader)
+const char* missVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main()
+{
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+}
+)";
+
+const char* missFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+uniform float alpha;
+
+void main()
+{
+    FragColor = vec4(1.0, 0.0, 0.0, alpha);
+}
+)";
+
 // Boundary checking function
 void enforceWorldBoundaries(glm::vec3& position) {
     float boundary = WORLD_BOUNDARY - playerRadius;
@@ -225,7 +259,15 @@ glm::vec3 generateRandomEggColor() {
 
 // Spawn a new egg
 void spawnEgg() {
-    if (eggs.size() < MAX_EGGS) {
+    // Remove any inactive eggs first to keep the list clean
+    eggs.erase(std::remove_if(eggs.begin(), eggs.end(),
+        [](const Egg& egg) { return !egg.active; }), eggs.end());
+
+    // Only spawn if we have room for more eggs and game is active
+    int activeEggCount = std::count_if(eggs.begin(), eggs.end(),
+        [](const Egg& egg) { return egg.active && !egg.isPoison; });
+
+    if (activeEggCount < MAX_EGGS && !gameOver) {
         Egg newEgg;
         newEgg.position = generateRandomEggPosition();
         newEgg.active = true;
@@ -245,14 +287,14 @@ void spawnEgg() {
 
 // Spawn a poison egg
 void spawnPoisonEgg() {
-    int poisonEggCount = 0;
-    for (const auto& egg : eggs) {
-        if (egg.isPoison && egg.active) {
-            poisonEggCount++;
-        }
-    }
+    // Remove any inactive eggs first to keep the list clean
+    eggs.erase(std::remove_if(eggs.begin(), eggs.end(),
+        [](const Egg& egg) { return !egg.active; }), eggs.end());
 
-    if (poisonEggCount < MAX_POISON_EGGS) {
+    int poisonEggCount = std::count_if(eggs.begin(), eggs.end(),
+        [](const Egg& egg) { return egg.active && egg.isPoison; });
+
+    if (poisonEggCount < MAX_POISON_EGGS && !gameOver) {
         Egg poisonEgg;
         poisonEgg.position = generateRandomEggPosition();
         poisonEgg.active = true;
@@ -277,9 +319,11 @@ void killPlayer() {
         lives--;
         playerRespawnTimer = PLAYER_RESPAWN_TIME;
 
+        // Check for game over due to no lives
         if (lives <= 0) {
             gameOver = true;
             std::cout << "GAME OVER! Final Score: " << score << std::endl;
+            std::cout << "Reason: No lives remaining!" << std::endl;
         }
         else {
             std::cout << "Player died! Lives remaining: " << lives << std::endl;
@@ -295,8 +339,53 @@ void respawnPlayer() {
     std::cout << "Player respawned!" << std::endl;
 }
 
+// Check for missed eggs (Fruit Ninja style)
+void checkForMissedEggs() {
+    for (auto it = eggs.begin(); it != eggs.end(); ) {
+        if (it->active && !it->isPoison && it->lifeTimer <= 0.0f) {
+            // Egg expired without being collected - this is a miss!
+            missedEggs++;
+
+            // Add miss indicator at egg position
+            glm::vec3 missIndicator = glm::vec3(it->position.x, missIndicatorDuration, it->position.z);
+            missIndicators.push_back(missIndicator);
+
+            std::cout << "Missed egg! Misses: " << missedEggs << "/" << MAX_MISSES << std::endl;
+
+            // Check for game over due to too many misses
+            if (missedEggs >= MAX_MISSES) {
+                gameOver = true;
+                std::cout << "GAME OVER! Too many missed eggs! Final Score: " << score << std::endl;
+            }
+
+            // Remove the expired egg
+            it = eggs.erase(it);
+        }
+        else {
+            ++it;
+        }
+    }
+}
+
+// Update miss indicators
+void updateMissIndicators() {
+    // Remove expired miss indicators
+    missIndicators.erase(std::remove_if(missIndicators.begin(), missIndicators.end(),
+        [](const glm::vec3& indicator) {
+            return indicator.y <= 0.0f; // Use y component as timer
+        }), missIndicators.end());
+
+    // Update timers for active indicators
+    for (auto& indicator : missIndicators) {
+        indicator.y -= deltaTime; // Decrease timer (stored in y component)
+    }
+}
+
 // Update egg animations and lifecycle
 void updateEggs() {
+    // Don't update eggs if game is over
+    if (gameOver) return;
+
     // Update spawn timers
     eggSpawnTimer += deltaTime;
     poisonEggSpawnTimer += deltaTime;
@@ -350,17 +439,6 @@ void updateEggs() {
                 egg.scale = despawnProgress;
             }
 
-            // Deactivate egg if lifespan is over
-            if (egg.lifeTimer <= 0.0f) {
-                egg.active = false;
-                if (egg.isPoison) {
-                    std::cout << "Poison egg despawned!" << std::endl;
-                }
-                else {
-                    std::cout << "Egg despawned!" << std::endl;
-                }
-            }
-
             // Check for collisions with player (only if player is alive)
             if (playerAlive) {
                 float distance = glm::distance(playerPos, egg.position);
@@ -368,7 +446,7 @@ void updateEggs() {
 
                 if (distance < collisionDistance) {
                     if (egg.isPoison) {
-                        // Poison egg - kill player
+                        // Poison egg - kill player immediately
                         killPlayer();
                         egg.active = false;
                         std::cout << "Player hit poison egg! Lives: " << lives << std::endl;
@@ -381,16 +459,24 @@ void updateEggs() {
                     }
                 }
             }
+
+            // Deactivate poison eggs if lifespan is over (regular eggs are handled in checkForMissedEggs)
+            if (egg.isPoison && egg.lifeTimer <= 0.0f) {
+                egg.active = false;
+                std::cout << "Poison egg despawned!" << std::endl;
+            }
         }
     }
 
-    // Remove inactive eggs
+    // Remove inactive eggs (only poison eggs, regular eggs are removed in checkForMissedEggs)
     eggs.erase(std::remove_if(eggs.begin(), eggs.end(),
-        [](const Egg& egg) { return !egg.active; }), eggs.end());
+        [](const Egg& egg) { return !egg.active && egg.isPoison; }), eggs.end());
 }
 
 // Update player respawn
 void updatePlayer() {
+    if (gameOver) return; // Don't update player if game over
+
     if (!playerAlive && !gameOver) {
         playerRespawnTimer -= deltaTime;
         if (playerRespawnTimer <= 0.0f) {
@@ -465,7 +551,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 
 // Joystick input processing
 void processJoystickInput() {
-    if (!joystickPresent) return;
+    if (!joystickPresent || gameOver) return; // Don't process if game over
 
     int axesCount;
     const float* axes = glfwGetJoystickAxes(joystickId, &axesCount);
@@ -589,18 +675,25 @@ void processInput(GLFWwindow* window) {
         keyPressed = false;
     }
 
-    // Reset game with R key
+    // Reset game with R key - only when game is over
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && gameOver) {
         // Reset game state
         score = 0;
         lives = 3;
+        missedEggs = 0;
         playerAlive = true;
         gameOver = false;
         eggs.clear();
+        missIndicators.clear();
         playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
         playerTargetPos = playerPos;
+        eggSpawnTimer = 0.0f;
+        poisonEggSpawnTimer = 0.0f;
         std::cout << "Game reset! Starting over..." << std::endl;
     }
+
+    // Don't process movement if game is over
+    if (gameOver) return;
 
     // Reset player movement (only if player is alive)
     glm::vec3 movement = glm::vec3(0.0f);
@@ -809,6 +902,36 @@ void generateGround(std::vector<float>& vertices, std::vector<unsigned int>& ind
     }
 }
 
+// Function to generate a cross shape for miss indicators
+void generateCross(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
+    vertices.clear();
+    indices.clear();
+
+    float size = 1.0f;
+
+    // Two perpendicular lines forming a cross
+    // Horizontal line
+    vertices.insert(vertices.end(), {
+        -size, 0.1f, 0.0f,  // position
+        0.0f, 1.0f, 0.0f,   // normal (not used for miss shader)
+        size, 0.1f, 0.0f,
+        0.0f, 1.0f, 0.0f
+        });
+
+    // Vertical line
+    vertices.insert(vertices.end(), {
+        0.0f, 0.1f, -size,
+        0.0f, 1.0f, 0.0f,
+        0.0f, 0.1f, size,
+        0.0f, 1.0f, 0.0f
+        });
+
+    indices.insert(indices.end(), {
+        0, 1,  // horizontal line
+        2, 3   // vertical line
+        });
+}
+
 void showCameraSettingsWindow() {
     if (!showSettings) return;
 
@@ -817,6 +940,7 @@ void showCameraSettingsWindow() {
     // Game status
     ImGui::TextColored(ImVec4(1, 1, 0, 1), "SCORE: %d", score);
     ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "LIVES: %d", lives);
+    ImGui::TextColored(ImVec4(1, 0, 0, 1), "MISSES: %d/%d", missedEggs, MAX_MISSES);
 
     if (!playerAlive && !gameOver) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "RESPAWNING IN: %.1f", playerRespawnTimer);
@@ -824,6 +948,12 @@ void showCameraSettingsWindow() {
 
     if (gameOver) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "GAME OVER! Press R to restart");
+        if (missedEggs >= MAX_MISSES) {
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reason: Too many missed eggs!");
+        }
+        else {
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reason: No lives remaining!");
+        }
     }
 
     ImGui::Separator();
@@ -896,8 +1026,10 @@ void showCameraSettingsWindow() {
         int regularEggCount = 0;
         int poisonEggCount = 0;
         for (const auto& egg : eggs) {
-            if (egg.isPoison) poisonEggCount++;
-            else regularEggCount++;
+            if (egg.active) {
+                if (egg.isPoison) poisonEggCount++;
+                else regularEggCount++;
+            }
         }
 
         ImGui::Text("Regular Eggs: %d/%d", regularEggCount, MAX_EGGS);
@@ -947,15 +1079,23 @@ void showCameraSettingsWindow() {
         ImGui::Text("ESC: Exit");
         ImGui::Text("R: Restart game (when game over)");
         ImGui::Text("World Boundaries: Player cannot leave the ground area");
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Green Eggs: +10 points");
-        ImGui::TextColored(ImVec4(1, 0, 1, 1), "Purple/Green Poison Eggs: -1 life");
-        ImGui::Text("Collect good eggs, avoid poison eggs!");
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Colorful Eggs: +10 points");
+        ImGui::TextColored(ImVec4(1, 0, 1, 1), "Purple Poison Eggs: -1 life");
+        ImGui::Text("FRUIT NINJA STYLE:");
+        ImGui::Text("  - Collect ALL regular eggs (max 3 misses)");
+        ImGui::Text("  - Avoid poison eggs (instant death)");
+        ImGui::Text("  - Red X appears where you miss an egg");
     }
     ImGui::End();
 }
 
 int main() {
-    std::cout << "Sphere Controller with Joystick Support and ImGui" << std::endl;
+    std::cout << "Egg Collector - Fruit Ninja Style!" << std::endl;
+    std::cout << "FRUIT NINJA RULES:" << std::endl;
+    std::cout << "  - Collect ALL regular eggs (you can only miss " << MAX_MISSES << ")" << std::endl;
+    std::cout << "  - Poison eggs kill you immediately" << std::endl;
+    std::cout << "  - Red X appears where you miss an egg" << std::endl;
+    std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
@@ -966,9 +1106,8 @@ int main() {
     std::cout << "  - R: Restart game when game over" << std::endl;
     std::cout << "World Boundaries: Player is confined to a " << GROUND_SIZE << "x" << GROUND_SIZE << " area" << std::endl;
     std::cout << "Egg System:" << std::endl;
-    std::cout << "  - Regular eggs (various colors): +10 points, spawn every 15 seconds" << std::endl;
-    std::cout << "  - Poison eggs (purple/green): -1 life, spawn every 10 seconds" << std::endl;
-    std::cout << "  - You have 3 lives. Game over when all lives are lost." << std::endl;
+    std::cout << "  - Regular eggs (various colors): +10 points, must collect them all!" << std::endl;
+    std::cout << "  - Poison eggs (purple): -1 life, avoid at all costs!" << std::endl;
 
     // Seed random number generator
     srand(static_cast<unsigned int>(time(nullptr)));
@@ -986,7 +1125,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Avoid the Poison!", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style!", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -1025,8 +1164,9 @@ int main() {
     // Check for joystick connection
     checkJoystickConnection();
 
-    // Create shader program
+    // Create shader programs
     unsigned int shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
+    unsigned int missShaderProgram = createShaderProgram(missVertexShaderSource, missFragmentShaderSource);
 
     // Generate sphere geometry for player
     std::vector<float> sphereVertices;
@@ -1047,6 +1187,11 @@ int main() {
     std::vector<float> groundVertices;
     std::vector<unsigned int> groundIndices;
     generateGround(groundVertices, groundIndices);
+
+    // Generate cross geometry for miss indicators
+    std::vector<float> crossVertices;
+    std::vector<unsigned int> crossIndices;
+    generateCross(crossVertices, crossIndices);
 
     // Set up player sphere VAO, VBO, EBO
     unsigned int sphereVAO, sphereVBO, sphereEBO;
@@ -1112,6 +1257,20 @@ int main() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    // Set up cross VAO, VBO, EBO for miss indicators
+    unsigned int crossVAO, crossVBO, crossEBO;
+    glGenVertexArrays(1, &crossVAO);
+    glGenBuffers(1, &crossVBO);
+    glGenBuffers(1, &crossEBO);
+
+    glBindVertexArray(crossVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, crossVBO);
+    glBufferData(GL_ARRAY_BUFFER, crossVertices.size() * sizeof(float), crossVertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, crossEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, crossIndices.size() * sizeof(unsigned int), crossIndices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
     // Light position
     glm::vec3 lightPos = glm::vec3(10.0f, 10.0f, 10.0f);
 
@@ -1126,6 +1285,9 @@ int main() {
     float cameraDistanceVelocity = 0.0f;
     float cameraHeightVelocity = 0.0f;
     float cameraAngleVelocity = 0.0f;
+
+    // Enable line rendering for miss indicators
+    glLineWidth(3.0f);
 
     // Main loop
     while (!glfwWindowShouldClose(window)) {
@@ -1144,6 +1306,12 @@ int main() {
 
         // Update egg system
         updateEggs();
+
+        // Check for missed eggs (Fruit Ninja style) - MUST be called AFTER updateEggs
+        checkForMissedEggs();
+
+        // Update miss indicators
+        updateMissIndicators();
 
         // Update player respawn
         updatePlayer();
@@ -1177,6 +1345,7 @@ int main() {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        // Use main shader program for 3D objects
         glUseProgram(shaderProgram);
 
         // View and projection matrices
@@ -1202,7 +1371,7 @@ int main() {
             sphereModel = glm::translate(sphereModel, playerPos);
             sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
             glm::vec3 playerColor = glm::vec3(0.8f, 0.2f, 0.2f);
-       
+
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
             glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(playerColor));
             glBindVertexArray(sphereVAO);
@@ -1237,6 +1406,32 @@ int main() {
             }
         }
 
+        // Render miss indicators (Fruit Ninja style)
+        if (!missIndicators.empty()) {
+            glUseProgram(missShaderProgram);
+
+            // Set view and projection for miss shader
+            glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+            glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+            glBindVertexArray(crossVAO);
+
+            for (const auto& indicator : missIndicators) {
+                glm::mat4 crossModel = glm::mat4(1.0f);
+                crossModel = glm::translate(crossModel, glm::vec3(indicator.x, 0.2f, indicator.z)); // Position above ground
+                crossModel = glm::scale(crossModel, glm::vec3(1.5f, 1.5f, 1.5f)); // Scale up the cross
+
+                // Calculate alpha based on timer (fade out effect)
+                float alpha = indicator.y / missIndicatorDuration;
+
+                glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(crossModel));
+                glUniform1f(glGetUniformLocation(missShaderProgram, "alpha"), alpha);
+
+                // Draw as lines
+                glDrawElements(GL_LINES, crossIndices.size(), GL_UNSIGNED_INT, 0);
+            }
+        }
+
         // Render ImGui
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -1254,15 +1449,19 @@ int main() {
     glDeleteVertexArrays(1, &eggVAO);
     glDeleteVertexArrays(1, &poisonEggVAO);
     glDeleteVertexArrays(1, &groundVAO);
+    glDeleteVertexArrays(1, &crossVAO);
     glDeleteBuffers(1, &sphereVBO);
     glDeleteBuffers(1, &eggVBO);
     glDeleteBuffers(1, &poisonEggVBO);
     glDeleteBuffers(1, &groundVBO);
+    glDeleteBuffers(1, &crossVBO);
     glDeleteBuffers(1, &sphereEBO);
     glDeleteBuffers(1, &eggEBO);
     glDeleteBuffers(1, &poisonEggEBO);
     glDeleteBuffers(1, &groundEBO);
+    glDeleteBuffers(1, &crossEBO);
     glDeleteProgram(shaderProgram);
+    glDeleteProgram(missShaderProgram);
 
     glfwTerminate();
 
