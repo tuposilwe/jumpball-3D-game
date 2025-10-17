@@ -1201,15 +1201,8 @@ int main() {
             glm::mat4 sphereModel = glm::mat4(1.0f);
             sphereModel = glm::translate(sphereModel, playerPos);
             sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
-
-            // Make player flash red when recently respawned
             glm::vec3 playerColor = glm::vec3(0.8f, 0.2f, 0.2f);
-            if (playerRespawnTimer > PLAYER_RESPAWN_TIME - 1.0f) {
-                // Flash during first second after respawn
-                float flash = sin(glfwGetTime() * 10.0f) * 0.5f + 0.5f;
-                playerColor = glm::mix(playerColor, glm::vec3(1.0f, 1.0f, 1.0f), flash);
-            }
-
+       
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
             glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(playerColor));
             glBindVertexArray(sphereVAO);
