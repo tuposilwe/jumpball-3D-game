@@ -115,6 +115,40 @@ const int MAX_MISSES = 3;
 std::vector<glm::vec3> missIndicators; // x,z for position, y for timer
 float missIndicatorDuration = 1.5f;
 
+// Enhanced collection effect properties (Fruit Ninja style)
+struct CollectionEffect {
+    glm::vec3 position;
+    glm::vec3 color;
+    float timer;
+    float duration;
+    bool active;
+    std::vector<glm::vec3> particlePositions;
+    std::vector<glm::vec3> particleVelocities;
+    std::vector<glm::vec3> particleSizes;
+    std::vector<float> particleRotations;
+    std::vector<float> particleRotationSpeeds;
+};
+
+std::vector<CollectionEffect> collectionEffects;
+const float COLLECTION_EFFECT_DURATION = 1.2f;
+const int COLLECTION_PARTICLES = 16; // More particles for better effect
+
+// Enhanced death effect
+struct DeathEffect {
+    glm::vec3 position;
+    float timer;
+    float duration;
+    bool active;
+    std::vector<glm::vec3> particlePositions;
+    std::vector<glm::vec3> particleVelocities;
+    std::vector<glm::vec3> particleSizes;
+    std::vector<glm::vec3> particleColors;
+};
+
+std::vector<DeathEffect> deathEffects;
+const float DEATH_EFFECT_DURATION = 2.0f;
+const int DEATH_PARTICLES = 20;
+
 // Joystick properties
 bool joystickPresent = false;
 int joystickId = GLFW_JOYSTICK_1;
@@ -225,6 +259,34 @@ uniform float alpha;
 void main()
 {
     FragColor = vec4(1.0, 0.0, 0.0, alpha);
+}
+)";
+
+// Effect shader
+const char* effectVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main()
+{
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+}
+)";
+
+const char* effectFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+uniform vec3 effectColor;
+uniform float alpha;
+
+void main()
+{
+    FragColor = vec4(effectColor, alpha);
 }
 )";
 
@@ -370,6 +432,143 @@ void spawnPoisonEgg() {
     }
 }
 
+// Enhanced collection effect creation (Fruit Ninja style)
+void createCollectionEffect(const glm::vec3& position, const glm::vec3& color) {
+    CollectionEffect effect;
+    effect.position = position;
+    effect.color = color;
+    effect.timer = COLLECTION_EFFECT_DURATION;
+    effect.duration = COLLECTION_EFFECT_DURATION;
+    effect.active = true;
+
+    // Create particles for burst effect - Fruit Ninja style
+    for (int i = 0; i < COLLECTION_PARTICLES; i++) {
+        // Random direction in a more controlled burst pattern
+        float angle = (float)i / COLLECTION_PARTICLES * 2.0f * 3.14159f;
+        float spread = 0.3f + ((float)rand() / RAND_MAX) * 0.7f;
+        float speed = 3.0f + ((float)rand() / RAND_MAX) * 4.0f;
+
+        glm::vec3 velocity = glm::vec3(
+            cos(angle) * speed * spread,
+            1.5f + ((float)rand() / RAND_MAX) * 3.0f, // More upward velocity
+            sin(angle) * speed * spread
+        );
+
+        // Random particle size (like fruit chunks in Fruit Ninja)
+        glm::vec3 size = glm::vec3(
+            0.1f + ((float)rand() / RAND_MAX) * 0.2f,
+            0.1f + ((float)rand() / RAND_MAX) * 0.2f,
+            0.1f + ((float)rand() / RAND_MAX) * 0.2f
+        );
+
+        effect.particlePositions.push_back(position);
+        effect.particleVelocities.push_back(velocity);
+        effect.particleSizes.push_back(size);
+        effect.particleRotations.push_back((float)rand() / RAND_MAX * 6.28318f);
+        effect.particleRotationSpeeds.push_back(((float)rand() / RAND_MAX - 0.5f) * 10.0f);
+    }
+
+    collectionEffects.push_back(effect);
+    std::cout << "Collection effect created at (" << position.x << ", " << position.z << ")" << std::endl;
+}
+
+// Enhanced death effect creation
+void createDeathEffect(const glm::vec3& position) {
+    DeathEffect effect;
+    effect.position = position;
+    effect.timer = DEATH_EFFECT_DURATION;
+    effect.duration = DEATH_EFFECT_DURATION;
+    effect.active = true;
+
+    // Create particles for death explosion
+    for (int i = 0; i < DEATH_PARTICLES; i++) {
+        // Random spherical direction for explosion
+        float theta = ((float)rand() / RAND_MAX) * 2.0f * 3.14159f;
+        float phi = acos(2.0f * ((float)rand() / RAND_MAX) - 1.0f);
+        float speed = 3.0f + ((float)rand() / RAND_MAX) * 4.0f;
+
+        glm::vec3 velocity = glm::vec3(
+            sin(phi) * cos(theta) * speed,
+            sin(phi) * sin(theta) * speed,
+            cos(phi) * speed
+        );
+
+        // Random particle size
+        glm::vec3 size = glm::vec3(
+            0.15f + ((float)rand() / RAND_MAX) * 0.25f,
+            0.15f + ((float)rand() / RAND_MAX) * 0.25f,
+            0.15f + ((float)rand() / RAND_MAX) * 0.25f
+        );
+
+        // Purple color with some variation
+        glm::vec3 particleColor = glm::vec3(
+            0.6f + ((float)rand() / RAND_MAX) * 0.3f,
+            0.1f + ((float)rand() / RAND_MAX) * 0.2f,
+            0.7f + ((float)rand() / RAND_MAX) * 0.2f
+        );
+
+        effect.particlePositions.push_back(position);
+        effect.particleVelocities.push_back(velocity);
+        effect.particleSizes.push_back(size);
+        effect.particleColors.push_back(particleColor);
+    }
+
+    deathEffects.push_back(effect);
+    std::cout << "Death effect created at (" << position.x << ", " << position.z << ")" << std::endl;
+}
+
+// Update collection effects
+void updateCollectionEffects() {
+    for (auto& effect : collectionEffects) {
+        if (effect.active) {
+            effect.timer -= deltaTime;
+
+            // Update particle positions and rotations
+            for (size_t i = 0; i < effect.particlePositions.size(); i++) {
+                effect.particlePositions[i] += effect.particleVelocities[i] * deltaTime;
+                // Apply gravity
+                effect.particleVelocities[i].y -= 9.8f * deltaTime;
+                // Update rotation
+                effect.particleRotations[i] += effect.particleRotationSpeeds[i] * deltaTime;
+            }
+
+            // Deactivate when timer expires
+            if (effect.timer <= 0.0f) {
+                effect.active = false;
+            }
+        }
+    }
+
+    // Remove inactive effects
+    collectionEffects.erase(std::remove_if(collectionEffects.begin(), collectionEffects.end(),
+        [](const CollectionEffect& effect) { return !effect.active; }), collectionEffects.end());
+}
+
+// Update death effects
+void updateDeathEffects() {
+    for (auto& effect : deathEffects) {
+        if (effect.active) {
+            effect.timer -= deltaTime;
+
+            // Update particle positions
+            for (size_t i = 0; i < effect.particlePositions.size(); i++) {
+                effect.particlePositions[i] += effect.particleVelocities[i] * deltaTime;
+                // Apply gravity
+                effect.particleVelocities[i].y -= 9.8f * deltaTime;
+            }
+
+            // Deactivate when timer expires
+            if (effect.timer <= 0.0f) {
+                effect.active = false;
+            }
+        }
+    }
+
+    // Remove inactive effects
+    deathEffects.erase(std::remove_if(deathEffects.begin(), deathEffects.end(),
+        [](const DeathEffect& effect) { return !effect.active; }), deathEffects.end());
+}
+
 // Player death function
 void killPlayer() {
     if (playerAlive) {
@@ -505,12 +704,14 @@ void updateEggs() {
                 if (distance < collisionDistance) {
                     if (egg.isPoison) {
                         // Poison egg - kill player immediately
+                        createDeathEffect(egg.position); // Add death effect
                         killPlayer();
                         egg.active = false;
                         std::cout << "Player hit poison egg! Lives: " << lives << std::endl;
                     }
                     else {
                         // Regular egg - collect and score
+                        createCollectionEffect(egg.position, egg.color); // Add collection effect
                         egg.active = false;
                         score += 10;
                         std::cout << "Egg collected! Score: " << score << std::endl;
@@ -552,6 +753,8 @@ void resetGame() {
     playerAlive = true;
     eggs.clear();
     missIndicators.clear();
+    collectionEffects.clear();
+    deathEffects.clear();
     playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
     playerTargetPos = playerPos;
     playerRotation = 0.0f;
@@ -1709,6 +1912,20 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Effect System")) {
+        ImGui::Text("Collection Effects: %zu", collectionEffects.size());
+        ImGui::Text("Death Effects: %zu", deathEffects.size());
+
+        if (ImGui::Button("Test Collection Effect")) {
+            createCollectionEffect(playerPos, glm::vec3(1.0f, 0.5f, 0.0f));
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Test Death Effect")) {
+            createDeathEffect(playerPos);
+        }
+    }
+
     if (ImGui::CollapsingHeader("Joystick settings")) {
         ImGui::SliderFloat("Joystick Deadzone", &joystickDeadzone, 0.0f, 0.5f);
 
@@ -1766,6 +1983,8 @@ void showCameraSettingsWindow() {
         ImGui::Text("  - Collect ALL regular eggs (max 3 misses)");
         ImGui::Text("  - Avoid poison eggs (instant death)");
         ImGui::Text("  - Red X appears where you miss an egg");
+        ImGui::Text("  - Colorful burst effects when collecting eggs");
+        ImGui::Text("  - Purple explosion effects when hitting poison eggs");
     }
     ImGui::End();
 }
@@ -1776,6 +1995,8 @@ int main() {
     std::cout << "  - Collect ALL regular eggs (you can only miss " << MAX_MISSES << ")" << std::endl;
     std::cout << "  - Poison eggs kill you immediately" << std::endl;
     std::cout << "  - Red X appears where you miss an egg" << std::endl;
+    std::cout << "  - Colorful burst effects when collecting eggs" << std::endl;
+    std::cout << "  - Purple explosion effects when hitting poison eggs" << std::endl;
     std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
@@ -1830,6 +2051,8 @@ int main() {
     }
 
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     // Setup ImGui context
     IMGUI_CHECKVERSION();
@@ -1850,6 +2073,7 @@ int main() {
     // Create shader programs
     unsigned int shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
     unsigned int missShaderProgram = createShaderProgram(missVertexShaderSource, missFragmentShaderSource);
+    unsigned int effectShaderProgram = createShaderProgram(effectVertexShaderSource, effectFragmentShaderSource);
 
     // Initialize text rendering
     initTextRendering();
@@ -2001,6 +2225,10 @@ int main() {
             // Update miss indicators
             updateMissIndicators();
 
+            // Update effect systems
+            updateCollectionEffects();
+            updateDeathEffects();
+
             // Update player respawn
             updatePlayer();
 
@@ -2124,6 +2352,68 @@ int main() {
                     glDrawElements(GL_LINES, crossIndices.size(), GL_UNSIGNED_INT, 0);
                 }
             }
+
+            // Render collection effects (Fruit Ninja style)
+            if (!collectionEffects.empty()) {
+                glUseProgram(effectShaderProgram);
+
+                // Set view and projection for effect shader
+                glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+                glBindVertexArray(sphereVAO); // Use sphere geometry for particles
+
+                for (const auto& effect : collectionEffects) {
+                    if (effect.active) {
+                        float progress = 1.0f - (effect.timer / effect.duration);
+                        float alpha = (1.0f - progress) * 0.8f; // Fade out
+
+                        glUniform3fv(glGetUniformLocation(effectShaderProgram, "effectColor"), 1, glm::value_ptr(effect.color));
+                        glUniform1f(glGetUniformLocation(effectShaderProgram, "alpha"), alpha);
+
+                        // Render each particle
+                        for (size_t i = 0; i < effect.particlePositions.size(); i++) {
+                            glm::mat4 particleModel = glm::mat4(1.0f);
+                            particleModel = glm::translate(particleModel, effect.particlePositions[i]);
+                            particleModel = glm::rotate(particleModel, effect.particleRotations[i], glm::vec3(0.0f, 1.0f, 0.0f));
+                            particleModel = glm::scale(particleModel, effect.particleSizes[i] * (1.0f - progress * 0.5f)); // Shrink over time
+
+                            glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(particleModel));
+                            glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+                        }
+                    }
+                }
+            }
+
+            // Render death effects
+            if (!deathEffects.empty()) {
+                glUseProgram(effectShaderProgram);
+
+                // Set view and projection for effect shader
+                glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+                glBindVertexArray(sphereVAO);
+
+                for (const auto& effect : deathEffects) {
+                    if (effect.active) {
+                        float progress = 1.0f - (effect.timer / effect.duration);
+                        float alpha = (1.0f - progress) * 0.6f; // Fade out
+
+                        // Render each particle with its own color
+                        for (size_t i = 0; i < effect.particlePositions.size(); i++) {
+                            glm::mat4 particleModel = glm::mat4(1.0f);
+                            particleModel = glm::translate(particleModel, effect.particlePositions[i]);
+                            particleModel = glm::scale(particleModel, effect.particleSizes[i] * (1.0f - progress * 0.7f)); // Shrink over time
+
+                            glUniform3fv(glGetUniformLocation(effectShaderProgram, "effectColor"), 1, glm::value_ptr(effect.particleColors[i]));
+                            glUniform1f(glGetUniformLocation(effectShaderProgram, "alpha"), alpha);
+                            glUniformMatrix4fv(glGetUniformLocation(effectShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(particleModel));
+                            glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+                        }
+                    }
+                }
+            }
         }
 
         // Render appropriate UI based on game state
@@ -2182,6 +2472,7 @@ int main() {
     glDeleteBuffers(1, &crossEBO);
     glDeleteProgram(shaderProgram);
     glDeleteProgram(missShaderProgram);
+    glDeleteProgram(effectShaderProgram);
 
     glfwTerminate();
 
