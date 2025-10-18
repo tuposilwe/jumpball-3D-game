@@ -1051,11 +1051,18 @@ void processInput(GLFWwindow* window) {
             pKeyPressed = false;
         }
 
-        // Reset game with R key (with key debouncing)
+        // Reset game with R key (with key debouncing) - FIXED
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             if (!rKeyPressed) {
                 resetGame();
+                // Ensure game goes back to playing state after reset
+                if (currentGameState != GAME_START) {
+                    currentGameState = GAME_PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    firstMouse = true; // Reset mouse look
+                }
                 rKeyPressed = true;
+                std::cout << "Game restarted! Score: 0, Lives: 3, Misses: 0" << std::endl;
             }
         }
         else {
@@ -1107,12 +1114,18 @@ void processInput(GLFWwindow* window) {
         else {
             pKeyPressed = false;
         }
-
-        // Reset game with R key (with key debouncing)
+        // Reset game with R key (with key debouncing) - FIXED
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             if (!rKeyPressed) {
                 resetGame();
+                // Ensure game goes back to playing state after reset
+                if (currentGameState != GAME_START) {
+                    currentGameState = GAME_PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    firstMouse = true; // Reset mouse look
+                }
                 rKeyPressed = true;
+                std::cout << "Game restarted! Score: 0, Lives: 3, Misses: 0" << std::endl;
             }
         }
         else {
@@ -1120,11 +1133,18 @@ void processInput(GLFWwindow* window) {
         }
     }
     else if (currentGameState == GAME_OVER) {
-        // Restart game with R key (with key debouncing)
+        // Reset game with R key (with key debouncing) - FIXED
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             if (!rKeyPressed) {
                 resetGame();
+                // Ensure game goes back to playing state after reset
+                if (currentGameState != GAME_START) {
+                    currentGameState = GAME_PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    firstMouse = true; // Reset mouse look
+                }
                 rKeyPressed = true;
+                std::cout << "Game restarted! Score: 0, Lives: 3, Misses: 0" << std::endl;
             }
         }
         else {
