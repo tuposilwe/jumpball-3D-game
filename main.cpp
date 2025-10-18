@@ -23,6 +23,16 @@
 unsigned int SCR_WIDTH = 800;
 unsigned int SCR_HEIGHT = 600;
 
+// Game states
+enum GameState {
+    GAME_START,
+    GAME_PLAYING,
+    GAME_PAUSED,
+    GAME_OVER
+};
+
+GameState currentGameState = GAME_START;
+
 // World boundaries
 const float GROUND_SIZE = 20.0f;
 const float WORLD_BOUNDARY = GROUND_SIZE / 2.0f + 1.0f; // Slightly smaller than ground for visual margin
@@ -97,7 +107,7 @@ bool showSettings = false;
 // Game state
 int score = 0;
 int lives = 3;
-bool gameOver = false;
+bool gameRunning = true;
 
 // Fruit Ninja style miss system
 int missedEggs = 0;
@@ -315,7 +325,7 @@ void spawnEgg() {
     int activeEggCount = std::count_if(eggs.begin(), eggs.end(),
         [](const Egg& egg) { return egg.active && !egg.isPoison; });
 
-    if (activeEggCount < MAX_EGGS && !gameOver) {
+    if (activeEggCount < MAX_EGGS && currentGameState == GAME_PLAYING) {
         Egg newEgg;
         newEgg.position = generateRandomEggPosition();
         newEgg.active = true;
@@ -342,7 +352,7 @@ void spawnPoisonEgg() {
     int poisonEggCount = std::count_if(eggs.begin(), eggs.end(),
         [](const Egg& egg) { return egg.active && egg.isPoison; });
 
-    if (poisonEggCount < MAX_POISON_EGGS && !gameOver) {
+    if (poisonEggCount < MAX_POISON_EGGS && currentGameState == GAME_PLAYING) {
         Egg poisonEgg;
         poisonEgg.position = generateRandomEggPosition();
         poisonEgg.active = true;
@@ -369,7 +379,7 @@ void killPlayer() {
 
         // Check for game over due to no lives
         if (lives <= 0) {
-            gameOver = true;
+            currentGameState = GAME_OVER;
             std::cout << "GAME OVER! Final Score: " << score << std::endl;
             std::cout << "Reason: No lives remaining!" << std::endl;
         }
@@ -402,7 +412,7 @@ void checkForMissedEggs() {
 
             // Check for game over due to too many misses
             if (missedEggs >= MAX_MISSES) {
-                gameOver = true;
+                currentGameState = GAME_OVER;
                 std::cout << "GAME OVER! Too many missed eggs! Final Score: " << score << std::endl;
             }
 
@@ -431,8 +441,8 @@ void updateMissIndicators() {
 
 // Update egg animations and lifecycle
 void updateEggs() {
-    // Don't update eggs if game is over
-    if (gameOver) return;
+    // Don't update eggs if game is not playing
+    if (currentGameState != GAME_PLAYING) return;
 
     // Update spawn timers
     eggSpawnTimer += deltaTime;
@@ -523,14 +533,34 @@ void updateEggs() {
 
 // Update player respawn
 void updatePlayer() {
-    if (gameOver) return; // Don't update player if game over
+    if (currentGameState != GAME_PLAYING) return; // Don't update player if game not playing
 
-    if (!playerAlive && !gameOver) {
+    if (!playerAlive && currentGameState == GAME_PLAYING) {
         playerRespawnTimer -= deltaTime;
         if (playerRespawnTimer <= 0.0f) {
             respawnPlayer();
         }
     }
+}
+
+
+// Reset game function
+void resetGame() {
+    score = 0;
+    lives = 3;
+    missedEggs = 0;
+    playerAlive = true;
+    eggs.clear();
+    missIndicators.clear();
+    playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
+    playerTargetPos = playerPos;
+    playerRotation = 0.0f;
+    playerRotationTarget = 0.0f;
+    eggSpawnTimer = 0.0f;
+    poisonEggSpawnTimer = 0.0f;
+    playerRespawnTimer = 0.0f;
+
+    std::cout << "Game reset! Ready for new game." << std::endl;
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
@@ -562,6 +592,9 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     // Check if ImGui wants to capture the mouse
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) return;
+
+    // Don't process mouse input in start, paused, or game over screens
+    if (currentGameState == GAME_START || currentGameState == GAME_PAUSED || currentGameState == GAME_OVER) return;
 
     if (firstMouse) {
         lastX = xpos;
@@ -595,6 +628,9 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) return;
 
+    // Don't process scroll in start, paused, or game over screens
+    if (currentGameState == GAME_START || currentGameState == GAME_PAUSED || currentGameState == GAME_OVER) return;
+
     // Scroll wheel adjusts camera distance
     cameraTargetDistance -= yoffset * scrollSensitivity;
     if (cameraTargetDistance < 3.0f) cameraTargetDistance = 3.0f;
@@ -604,7 +640,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 
 // Joystick input processing
 void processJoystickInput() {
-    if (!joystickPresent || gameOver) return; // Don't process if game over
+    if (!joystickPresent || currentGameState != GAME_PLAYING) return;
 
     int axesCount;
     const float* axes = glfwGetJoystickAxes(joystickId, &axesCount);
@@ -711,77 +747,189 @@ void processJoystickInput() {
     updateCamera();
 }
 
+
+
+// In the processInput function, replace the ESC handling:
 void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
+    // Handle ESC key with different behaviors based on game state
+    static bool escKeyPressed = false;
+    static bool pKeyPressed = false;
+    static bool rKeyPressed = false;
+    static bool enterKeyPressed = false;
+    static bool spaceKeyPressed = false;
 
-    static bool keyPressed = false;
-    // Toggle ImGui settings window with F1
-    if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
+    // Replace the current ESC handling section with this:
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        if (!escKeyPressed) {
+            escKeyPressed = true;
 
-        if (!keyPressed) {
-            showSettings = !showSettings;
-            keyPressed = true;
+            if (currentGameState == GAME_PLAYING) {
+                // ESC during gameplay: pause the game
+                currentGameState = GAME_PAUSED;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                std::cout << "Game paused! Press ESC again for Main Menu" << std::endl;
+            }
+            else if (currentGameState == GAME_PAUSED || currentGameState == GAME_OVER) {
+                // ESC from pause/game over: reset game and go to start screen
+                resetGame();
+                currentGameState = GAME_START;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                std::cout << "Returning to Main Menu. Game has been reset." << std::endl;
+            }
+            else if (currentGameState == GAME_START) {
+                // ESC at start screen: quit game
+                glfwSetWindowShouldClose(window, true);
+                std::cout << "Quitting game..." << std::endl;
+            }
         }
     }
     else {
-        keyPressed = false;
+        escKeyPressed = false;
     }
 
-    // Reset game with R key - only when game is over
-    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && gameOver) {
-        // Reset game state
-        score = 0;
-        lives = 3;
-        missedEggs = 0;
-        playerAlive = true;
-        gameOver = false;
-        eggs.clear();
-        missIndicators.clear();
-        playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
-        playerTargetPos = playerPos;
-        eggSpawnTimer = 0.0f;
-        poisonEggSpawnTimer = 0.0f;
-        std::cout << "Game reset! Starting over..." << std::endl;
-    }
 
-    // Don't process movement if game is over
-    if (gameOver) return;
 
-    // Reset player movement (only if player is alive)
-    glm::vec3 movement = glm::vec3(0.0f);
-
-    if (playerAlive) {
-        // Player movement relative to camera direction using pre-calculated vectors
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            movement -= cameraForward;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            movement += cameraForward;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            movement -= cameraRight;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            movement += cameraRight;
-
-        // Normalize movement if diagonal to maintain consistent speed
-        if (glm::length(movement) > 0.0f) {
-            movement = glm::normalize(movement);
-
-            // Update player rotation to face movement direction
-            playerRotationTarget = atan2(movement.x, movement.z);
-
-            // Apply movement with speed and delta time to target position
-            playerTargetPos += movement * playerSpeed * deltaTime;
-
-            // Enforce boundaries on target position
-            enforceWorldBoundaries(playerTargetPos);
+    // Toggle ImGui settings window with F1
+    static bool f1KeyPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS) {
+        if (!f1KeyPressed) {
+            showSettings = !showSettings;
+            f1KeyPressed = true;
         }
     }
+    else {
+        f1KeyPressed = false;
+    }
 
-    // Process joystick input
-    processJoystickInput();
+    // Handle game state transitions
+    if (currentGameState == GAME_START) {
+        // Start game with ENTER or SPACE (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+            if (!enterKeyPressed) {
+                currentGameState = GAME_PLAYING;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                enterKeyPressed = true;
+                std::cout << "Game started!" << std::endl;
+            }
+        }
+        else {
+            enterKeyPressed = false;
+        }
 
-    updateCamera();
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+            if (!spaceKeyPressed) {
+                currentGameState = GAME_PLAYING;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                spaceKeyPressed = true;
+                std::cout << "Game started!" << std::endl;
+            }
+        }
+        else {
+            spaceKeyPressed = false;
+        }
+    }
+    else if (currentGameState == GAME_PLAYING) {
+        // Pause game with P key (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+            if (!pKeyPressed) {
+                if (currentGameState == GAME_PLAYING) {
+                    currentGameState = GAME_PAUSED;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                }
+                else if (currentGameState == GAME_PAUSED) {
+                    currentGameState = GAME_PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    firstMouse = true; // Reset firstMouse when resuming
+                }
+                pKeyPressed = true;
+            }
+        }
+        else {
+            pKeyPressed = false;
+        }
+
+        // Reset game with R key (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+            if (!rKeyPressed) {
+                resetGame();
+                rKeyPressed = true;
+            }
+        }
+        else {
+            rKeyPressed = false;
+        }
+
+        // Player movement relative to camera direction using pre-calculated vectors
+        glm::vec3 movement = glm::vec3(0.0f);
+
+        if (playerAlive) {
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                movement -= cameraForward;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                movement += cameraForward;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                movement -= cameraRight;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                movement += cameraRight;
+
+            // Normalize movement if diagonal to maintain consistent speed
+            if (glm::length(movement) > 0.0f) {
+                movement = glm::normalize(movement);
+
+                // Update player rotation to face movement direction
+                playerRotationTarget = atan2(movement.x, movement.z);
+
+                // Apply movement with speed and delta time to target position
+                playerTargetPos += movement * playerSpeed * deltaTime;
+
+                // Enforce boundaries on target position
+                enforceWorldBoundaries(playerTargetPos);
+            }
+        }
+
+        // Process joystick input
+        processJoystickInput();
+        updateCamera();
+    }
+    else if (currentGameState == GAME_PAUSED) {
+        // Resume game with P key (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+            if (!pKeyPressed) {
+                currentGameState = GAME_PLAYING;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                pKeyPressed = true;
+                std::cout << "Game resumed!" << std::endl;
+            }
+        }
+        else {
+            pKeyPressed = false;
+        }
+
+        // Reset game with R key (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+            if (!rKeyPressed) {
+                resetGame();
+                rKeyPressed = true;
+            }
+        }
+        else {
+            rKeyPressed = false;
+        }
+    }
+    else if (currentGameState == GAME_OVER) {
+        // Restart game with R key (with key debouncing)
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+            if (!rKeyPressed) {
+                resetGame();
+                rKeyPressed = true;
+            }
+        }
+        else {
+            rKeyPressed = false;
+        }
+    }
 }
+
 
 // Check for joystick connection
 void checkJoystickConnection() {
@@ -1118,9 +1266,293 @@ void RenderText(std::string text, float x, float y, float scale, glm::vec3 color
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// Render Start Screen
+void renderStartScreen() {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Title
+    std::string titleText = "EGG COLLECTOR";
+    float titleWidth = 0;
+    for (char c : titleText) {
+        Character ch = Characters[c];
+        titleWidth += (ch.Advance >> 6) * 1.0f;
+    }
+    float titleX = (SCR_WIDTH - titleWidth) / 2.0f;
+    RenderText(titleText, titleX, SCR_HEIGHT * 0.7f, 1.0f, glm::vec3(1.0f, 1.0f, 0.0f));
+
+    // Subtitle
+    std::string subtitleText = "Fruit Ninja Style!";
+    float subtitleWidth = 0;
+    for (char c : subtitleText) {
+        Character ch = Characters[c];
+        subtitleWidth += (ch.Advance >> 6) * 0.5f;
+    }
+    float subtitleX = (SCR_WIDTH - subtitleWidth) / 2.0f;
+    RenderText(subtitleText, subtitleX, SCR_HEIGHT * 0.6f, 0.5f, glm::vec3(1.0f, 0.5f, 0.0f));
+
+    // Instructions
+    std::string instruction1 = "Collect colorful eggs, avoid purple poison eggs!";
+    float inst1Width = 0;
+    for (char c : instruction1) {
+        Character ch = Characters[c];
+        inst1Width += (ch.Advance >> 6) * 0.3f;
+    }
+    float inst1X = (SCR_WIDTH - inst1Width) / 2.0f;
+    RenderText(instruction1, inst1X, SCR_HEIGHT * 0.45f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
+
+    std::string instruction2 = "You can only miss " + std::to_string(MAX_MISSES) + " eggs total!";
+    float inst2Width = 0;
+    for (char c : instruction2) {
+        Character ch = Characters[c];
+        inst2Width += (ch.Advance >> 6) * 0.3f;
+    }
+    float inst2X = (SCR_WIDTH - inst2Width) / 2.0f;
+    RenderText(instruction2, inst2X, SCR_HEIGHT * 0.4f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
+
+    // Controls
+    std::string controlsTitle = "CONTROLS:";
+    float ctrlTitleWidth = 0;
+    for (char c : controlsTitle) {
+        Character ch = Characters[c];
+        ctrlTitleWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float ctrlTitleX = (SCR_WIDTH - ctrlTitleWidth) / 2.0f;
+    RenderText(controlsTitle, ctrlTitleX, SCR_HEIGHT * 0.3f, 0.4f, glm::vec3(0.3f, 0.8f, 1.0f));
+
+    std::string controls1 = "WASD: Move   |   Mouse: Look   |   Scroll: Zoom";
+    float ctrl1Width = 0;
+    for (char c : controls1) {
+        Character ch = Characters[c];
+        ctrl1Width += (ch.Advance >> 6) * 0.25f;
+    }
+    float ctrl1X = (SCR_WIDTH - ctrl1Width) / 2.0f;
+    RenderText(controls1, ctrl1X, SCR_HEIGHT * 0.25f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
+
+    std::string controls2 = "P: Pause   |   R: Restart   |   F1: Settings   |   ESC: Quit";
+    float ctrl2Width = 0;
+    for (char c : controls2) {
+        Character ch = Characters[c];
+        ctrl2Width += (ch.Advance >> 6) * 0.25f;
+    }
+    float ctrl2X = (SCR_WIDTH - ctrl2Width) / 2.0f;
+    RenderText(controls2, ctrl2X, SCR_HEIGHT * 0.22f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
+
+    // Start prompt
+    std::string startText = "Press ENTER or SPACE to Start";
+    float startWidth = 0;
+    for (char c : startText) {
+        Character ch = Characters[c];
+        startWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float startX = (SCR_WIDTH - startWidth) / 2.0f;
+
+    // Blinking effect
+    float blink = sin(glfwGetTime() * 3.0f) * 0.5f + 0.5f;
+    RenderText(startText, startX, SCR_HEIGHT * 0.1f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f) * blink);
+
+    glDisable(GL_BLEND);
+}
+
+// Render Pause Screen
+void renderPauseScreen() {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Semi-transparent background
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(textShaderProgram);
+    glBindVertexArray(textVAO);
+
+    // Draw a semi-transparent quad over the entire screen
+    float vertices[] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        SCR_WIDTH, 0.0f, 1.0f, 0.0f,
+        SCR_WIDTH, SCR_HEIGHT, 1.0f, 1.0f,
+        0.0f, SCR_HEIGHT, 0.0f, 1.0f
+    };
+    unsigned int indices[] = { 0, 1, 2, 2, 3, 0 };
+
+    unsigned int tempVAO, tempVBO, tempEBO;
+    glGenVertexArrays(1, &tempVAO);
+    glGenBuffers(1, &tempVBO);
+    glGenBuffers(1, &tempEBO);
+
+    glBindVertexArray(tempVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, tempVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tempEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Use a simple shader for the overlay
+    unsigned int overlayShader = createShaderProgram(
+        "#version 330 core\n"
+        "layout (location = 0) in vec4 aPos;\n"
+        "void main() { gl_Position = vec4(aPos.xy * 2.0 - 1.0, 0.0, 1.0); }",
+        "#version 330 core\n"
+        "out vec4 FragColor;\n"
+        "void main() { FragColor = vec4(0.0, 0.0, 0.0, 0.7); }"
+    );
+
+    glUseProgram(overlayShader);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    glDeleteProgram(overlayShader);
+    glDeleteVertexArrays(1, &tempVAO);
+    glDeleteBuffers(1, &tempVBO);
+    glDeleteBuffers(1, &tempEBO);
+
+    glEnable(GL_DEPTH_TEST);
+
+    // Pause text
+    std::string pauseText = "GAME PAUSED";
+    float pauseWidth = 0;
+    for (char c : pauseText) {
+        Character ch = Characters[c];
+        pauseWidth += (ch.Advance >> 6) * 0.8f;
+    }
+    float pauseX = (SCR_WIDTH - pauseWidth) / 2.0f;
+    RenderText(pauseText, pauseX, SCR_HEIGHT * 0.6f, 0.8f, glm::vec3(1.0f, 1.0f, 0.0f));
+
+    // Continue prompt
+    std::string continueText = "Press P to Continue";
+    float continueWidth = 0;
+    for (char c : continueText) {
+        Character ch = Characters[c];
+        continueWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float continueX = (SCR_WIDTH - continueWidth) / 2.0f;
+    RenderText(continueText, continueX, SCR_HEIGHT * 0.4f, 0.4f, glm::vec3(1.0f, 1.0f, 1.0f));
+
+    // Restart prompt
+    std::string restartText = "Press R to Restart";
+    float restartWidth = 0;
+    for (char c : restartText) {
+        Character ch = Characters[c];
+        restartWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float restartX = (SCR_WIDTH - restartWidth) / 2.0f;
+    RenderText(restartText, restartX, SCR_HEIGHT * 0.35f, 0.4f, glm::vec3(1.0f, 1.0f, 1.0f));
+
+    glDisable(GL_BLEND);
+}
+
+// Render Game Over Screen
+void renderGameOverScreen() {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Semi-transparent background (same as pause screen)
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(textShaderProgram);
+    glBindVertexArray(textVAO);
+
+    float vertices[] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        SCR_WIDTH, 0.0f, 1.0f, 0.0f,
+        SCR_WIDTH, SCR_HEIGHT, 1.0f, 1.0f,
+        0.0f, SCR_HEIGHT, 0.0f, 1.0f
+    };
+    unsigned int indices[] = { 0, 1, 2, 2, 3, 0 };
+
+    unsigned int tempVAO, tempVBO, tempEBO;
+    glGenVertexArrays(1, &tempVAO);
+    glGenBuffers(1, &tempVBO);
+    glGenBuffers(1, &tempEBO);
+
+    glBindVertexArray(tempVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, tempVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tempEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    unsigned int overlayShader = createShaderProgram(
+        "#version 330 core\n"
+        "layout (location = 0) in vec4 aPos;\n"
+        "void main() { gl_Position = vec4(aPos.xy * 2.0 - 1.0, 0.0, 1.0); }",
+        "#version 330 core\n"
+        "out vec4 FragColor;\n"
+        "void main() { FragColor = vec4(0.2, 0.0, 0.0, 0.8); }"
+    );
+
+    glUseProgram(overlayShader);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    glDeleteProgram(overlayShader);
+    glDeleteVertexArrays(1, &tempVAO);
+    glDeleteBuffers(1, &tempVBO);
+    glDeleteBuffers(1, &tempEBO);
+
+    glEnable(GL_DEPTH_TEST);
+
+    // Game Over text
+    std::string gameOverText = "GAME OVER";
+    float gameOverWidth = 0;
+    for (char c : gameOverText) {
+        Character ch = Characters[c];
+        gameOverWidth += (ch.Advance >> 6) * 1.0f;
+    }
+    float gameOverX = (SCR_WIDTH - gameOverWidth) / 2.0f;
+    RenderText(gameOverText, gameOverX, SCR_HEIGHT * 0.7f, 1.0f, glm::vec3(1.0f, 0.0f, 0.0f));
+
+    // Final score
+    std::string scoreText = "Final Score: " + std::to_string(score);
+    float scoreWidth = 0;
+    for (char c : scoreText) {
+        Character ch = Characters[c];
+        scoreWidth += (ch.Advance >> 6) * 0.5f;
+    }
+    float scoreX = (SCR_WIDTH - scoreWidth) / 2.0f;
+    RenderText(scoreText, scoreX, SCR_HEIGHT * 0.55f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
+
+    // Game over reason
+    std::string reasonText;
+    if (missedEggs >= MAX_MISSES) {
+        reasonText = "Too many missed eggs!";
+    }
+    else {
+        reasonText = "No lives remaining!";
+    }
+    float reasonWidth = 0;
+    for (char c : reasonText) {
+        Character ch = Characters[c];
+        reasonWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float reasonX = (SCR_WIDTH - reasonWidth) / 2.0f;
+    RenderText(reasonText, reasonX, SCR_HEIGHT * 0.45f, 0.4f, glm::vec3(1.0f, 0.5f, 0.5f));
+
+    // Restart prompt
+    std::string restartText = "Press R to Play Again";
+    float restartWidth = 0;
+    for (char c : restartText) {
+        Character ch = Characters[c];
+        restartWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float restartX = (SCR_WIDTH - restartWidth) / 2.0f;
+    RenderText(restartText, restartX, SCR_HEIGHT * 0.3f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Return to menu prompt
+    std::string menuText = "Press ESC for Main Menu";
+    float menuWidth = 0;
+    for (char c : menuText) {
+        Character ch = Characters[c];
+        menuWidth += (ch.Advance >> 6) * 0.3f;
+    }
+    float menuX = (SCR_WIDTH - menuWidth) / 2.0f;
+    RenderText(menuText, menuX, SCR_HEIGHT * 0.25f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
+
+    glDisable(GL_BLEND);
+}
+
 // Render HUD function
 void renderHUD() {
-    // Enable blending for text rendering
+    // Only show HUD during gameplay
+    if (currentGameState != GAME_PLAYING) return;
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -1138,29 +1570,8 @@ void renderHUD() {
     glm::vec3 missesColor = (missedEggs >= MAX_MISSES - 1) ? glm::vec3(1.0f, 0.3f, 0.3f) : glm::vec3(1.0f, 1.0f, 1.0f);
     RenderText(missesText, 25.0f, SCR_HEIGHT - 130.0f, 0.5f, missesColor);
 
-    // Render game over message if applicable
-    if (gameOver) {
-        std::string gameOverText = "GAME OVER! Press R to restart";
-        float textWidth = 0;
-        for (char c : gameOverText) {
-            Character ch = Characters[c];
-            textWidth += (ch.Advance >> 6) * 0.7f;
-        }
-        float x = (SCR_WIDTH - textWidth) / 2.0f;
-        RenderText(gameOverText, x, SCR_HEIGHT / 2.0f, 0.7f, glm::vec3(1.0f, 0.0f, 0.0f));
-
-        std::string finalScoreText = "Final Score: " + std::to_string(score);
-        textWidth = 0;
-        for (char c : finalScoreText) {
-            Character ch = Characters[c];
-            textWidth += (ch.Advance >> 6) * 0.5f;
-        }
-        x = (SCR_WIDTH - textWidth) / 2.0f;
-        RenderText(finalScoreText, x, SCR_HEIGHT / 2.0f - 50.0f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
-    }
-
     // Render respawn timer if player is dead but game isn't over
-    if (!playerAlive && !gameOver) {
+    if (!playerAlive && currentGameState == GAME_PLAYING) {
         std::string respawnText = "RESPAWNING IN: " + std::to_string(static_cast<int>(playerRespawnTimer) + 1);
         float textWidth = 0;
         for (char c : respawnText) {
@@ -1172,7 +1583,7 @@ void renderHUD() {
     }
 
     // Render controls hint at bottom
-    std::string controlsText = "WASD: Move  |  Mouse: Look  |  Scroll: Zoom  |  F1: Settings  |  ESC: Quit";
+    std::string controlsText = "WASD: Move  |  Mouse: Look  |  Scroll: Zoom  |  P: Pause  |  F1: Settings  |  ESC: Quit";
     RenderText(controlsText, 25.0f, 30.0f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
 
     glDisable(GL_BLEND);
@@ -1188,18 +1599,18 @@ void showCameraSettingsWindow() {
     ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "LIVES: %d", lives);
     ImGui::TextColored(ImVec4(1, 0, 0, 1), "MISSES: %d/%d", missedEggs, MAX_MISSES);
 
-    if (!playerAlive && !gameOver) {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "RESPAWNING IN: %.1f", playerRespawnTimer);
+    // Game state
+    std::string stateText;
+    switch (currentGameState) {
+    case GAME_START: stateText = "START SCREEN"; break;
+    case GAME_PLAYING: stateText = "PLAYING"; break;
+    case GAME_PAUSED: stateText = "PAUSED"; break;
+    case GAME_OVER: stateText = "GAME OVER"; break;
     }
+    ImGui::TextColored(ImVec4(0, 1, 1, 1), "STATE: %s", stateText.c_str());
 
-    if (gameOver) {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "GAME OVER! Press R to restart");
-        if (missedEggs >= MAX_MISSES) {
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reason: Too many missed eggs!");
-        }
-        else {
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reason: No lives remaining!");
-        }
+    if (!playerAlive && currentGameState == GAME_PLAYING) {
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "RESPAWNING IN: %.1f", playerRespawnTimer);
     }
 
     ImGui::Separator();
@@ -1317,13 +1728,37 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Game State Controls")) {
+        if (ImGui::Button("Start Game")) {
+            currentGameState = GAME_PLAYING;
+            glfwSetInputMode(glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Pause Game")) {
+            currentGameState = GAME_PAUSED;
+            glfwSetInputMode(glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Game Over")) {
+            currentGameState = GAME_OVER;
+            glfwSetInputMode(glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Main Menu")) {
+            currentGameState = GAME_START;
+            glfwSetInputMode(glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    }
+
     if (ImGui::CollapsingHeader("Help")) {
         ImGui::Text("WASD: Move player");
         ImGui::Text("Mouse: Look around");
         ImGui::Text("Scroll: Zoom in/out");
+        ImGui::Text("P: Pause/Resume game");
+        ImGui::Text("R: Restart game");
         ImGui::Text("F1: Toggle this window");
-        ImGui::Text("ESC: Exit");
-        ImGui::Text("R: Restart game (when game over)");
+        ImGui::Text("ESC: Quit / Return to menu");
+        ImGui::Text("ENTER/SPACE: Start game from menu");
         ImGui::Text("World Boundaries: Player cannot leave the ground area");
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Colorful Eggs: +10 points");
         ImGui::TextColored(ImVec4(1, 0, 1, 1), "Purple Poison Eggs: -1 life");
@@ -1346,10 +1781,12 @@ int main() {
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
     std::cout << "  - Scroll: Zoom in/out" << std::endl;
+    std::cout << "  - P: Pause/Resume game" << std::endl;
+    std::cout << "  - R: Restart game" << std::endl;
     std::cout << "  - F1: Toggle camera settings" << std::endl;
     std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
-    std::cout << "  - ESC: Exit" << std::endl;
-    std::cout << "  - R: Restart game when game over" << std::endl;
+    std::cout << "  - ESC: Exit / Return to menu" << std::endl;
+    std::cout << "  - ENTER/SPACE: Start game from menu" << std::endl;
     std::cout << "World Boundaries: Player is confined to a " << GROUND_SIZE << "x" << GROUND_SIZE << " area" << std::endl;
     std::cout << "Egg System:" << std::endl;
     std::cout << "  - Regular eggs (various colors): +10 points, must collect them all!" << std::endl;
@@ -1383,8 +1820,8 @@ int main() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
 
-    // Capture the mouse
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    // Start with cursor enabled for the start screen
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
@@ -1553,34 +1990,37 @@ int main() {
 
         processInput(window);
 
-        // Update egg system
-        updateEggs();
+        // Update game logic only when playing
+        if (currentGameState == GAME_PLAYING) {
+            // Update egg system
+            updateEggs();
 
-        // Check for missed eggs (Fruit Ninja style) - MUST be called AFTER updateEggs
-        checkForMissedEggs();
+            // Check for missed eggs (Fruit Ninja style) - MUST be called AFTER updateEggs
+            checkForMissedEggs();
 
-        // Update miss indicators
-        updateMissIndicators();
+            // Update miss indicators
+            updateMissIndicators();
 
-        // Update player respawn
-        updatePlayer();
+            // Update player respawn
+            updatePlayer();
 
-        // Apply smooth damping to player position (only if alive)
-        if (playerAlive) {
-            playerPos = smoothDamp(playerPos, playerTargetPos, playerPosVelocity, positionSmoothTime, deltaTime);
-            playerRotation = smoothDamp(playerRotation, playerRotationTarget, playerRotationVelocity, rotationSmoothTime, deltaTime);
+            // Apply smooth damping to player position (only if alive)
+            if (playerAlive) {
+                playerPos = smoothDamp(playerPos, playerTargetPos, playerPosVelocity, positionSmoothTime, deltaTime);
+                playerRotation = smoothDamp(playerRotation, playerRotationTarget, playerRotationVelocity, rotationSmoothTime, deltaTime);
+            }
+
+            // Apply smooth damping to camera parameters
+            cameraDistance = smoothDamp(cameraDistance, cameraTargetDistance, cameraDistanceVelocity, cameraSmoothTime, deltaTime);
+            cameraHeight = smoothDamp(cameraHeight, cameraTargetHeight, cameraHeightVelocity, cameraSmoothTime, deltaTime);
+            cameraAngle = smoothDamp(cameraAngle, cameraTargetAngle, cameraAngleVelocity, cameraSmoothTime, deltaTime);
+
+            // Apply smooth damping to camera position
+            cameraPos = smoothDamp(cameraPos, cameraTargetPos, cameraPosVelocity, cameraSmoothTime, deltaTime);
+
+            // Update camera vectors after smooth damping
+            updateCameraVectors();
         }
-
-        // Apply smooth damping to camera parameters
-        cameraDistance = smoothDamp(cameraDistance, cameraTargetDistance, cameraDistanceVelocity, cameraSmoothTime, deltaTime);
-        cameraHeight = smoothDamp(cameraHeight, cameraTargetHeight, cameraHeightVelocity, cameraSmoothTime, deltaTime);
-        cameraAngle = smoothDamp(cameraAngle, cameraTargetAngle, cameraAngleVelocity, cameraSmoothTime, deltaTime);
-
-        // Apply smooth damping to camera position
-        cameraPos = smoothDamp(cameraPos, cameraTargetPos, cameraPosVelocity, cameraSmoothTime, deltaTime);
-
-        // Update camera vectors after smooth damping
-        updateCameraVectors();
 
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -1594,95 +2034,115 @@ int main() {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Use main shader program for 3D objects
-        glUseProgram(shaderProgram);
+        // Render 3D scene for all states except start screen
+        if (currentGameState != GAME_START) {
+            // Use main shader program for 3D objects
+            glUseProgram(shaderProgram);
 
-        // View and projection matrices
-        glm::mat4 view = glm::lookAt(cameraPos, playerPos, cameraUp);
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+            // View and projection matrices
+            glm::mat4 view = glm::lookAt(cameraPos, playerPos, cameraUp);
+            glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
 
-        // Set shader uniforms
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniform3fv(glGetUniformLocation(shaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
-        glUniform3fv(glGetUniformLocation(shaderProgram, "viewPos"), 1, glm::value_ptr(cameraPos));
+            // Set shader uniforms
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+            glUniform3fv(glGetUniformLocation(shaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
+            glUniform3fv(glGetUniformLocation(shaderProgram, "viewPos"), 1, glm::value_ptr(cameraPos));
 
-        // Render ground
-        glm::mat4 groundModel = glm::mat4(1.0f);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(groundModel));
-        glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(glm::vec3(0.3f, 0.5f, 0.3f)));
-        glBindVertexArray(groundVAO);
-        glDrawElements(GL_TRIANGLES, groundIndices.size(), GL_UNSIGNED_INT, 0);
+            // Render ground
+            glm::mat4 groundModel = glm::mat4(1.0f);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(groundModel));
+            glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(glm::vec3(0.3f, 0.5f, 0.3f)));
+            glBindVertexArray(groundVAO);
+            glDrawElements(GL_TRIANGLES, groundIndices.size(), GL_UNSIGNED_INT, 0);
 
-        // Render player sphere (only if alive)
-        if (playerAlive) {
-            glm::mat4 sphereModel = glm::mat4(1.0f);
-            sphereModel = glm::translate(sphereModel, playerPos);
-            sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
-            glm::vec3 playerColor = glm::vec3(0.8f, 0.2f, 0.2f);
+            // Render player sphere (only if alive and in playing state)
+            if (playerAlive && currentGameState == GAME_PLAYING) {
+                glm::mat4 sphereModel = glm::mat4(1.0f);
+                sphereModel = glm::translate(sphereModel, playerPos);
+                sphereModel = glm::rotate(sphereModel, playerRotation, glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::vec3 playerColor = glm::vec3(0.8f, 0.2f, 0.2f);
 
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
-            glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(playerColor));
-            glBindVertexArray(sphereVAO);
-            glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
-        }
+                glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(sphereModel));
+                glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(playerColor));
+                glBindVertexArray(sphereVAO);
+                glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+            }
 
-        // Render eggs with animations
-        for (const auto& egg : eggs) {
-            if (egg.active) {
-                glm::mat4 eggModel = glm::mat4(1.0f);
-                eggModel = glm::translate(eggModel, egg.position);
+            // Render eggs with animations (only in playing state)
+            if (currentGameState == GAME_PLAYING) {
+                for (const auto& egg : eggs) {
+                    if (egg.active) {
+                        glm::mat4 eggModel = glm::mat4(1.0f);
+                        eggModel = glm::translate(eggModel, egg.position);
 
-                // Apply scale animation
-                float finalScale = egg.scale * egg.pulseFactor;
-                eggModel = glm::scale(eggModel, glm::vec3(finalScale));
+                        // Apply scale animation
+                        float finalScale = egg.scale * egg.pulseFactor;
+                        eggModel = glm::scale(eggModel, glm::vec3(finalScale));
 
-                glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(eggModel));
+                        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(eggModel));
 
-                // Choose the appropriate VAO based on egg type
-                if (egg.isPoison) {
-                    glBindVertexArray(poisonEggVAO);
-                    // Make poison eggs more vibrant
-                    glm::vec3 finalColor = egg.color * 1.2f;
-                    glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(finalColor));
+                        // Choose the appropriate VAO based on egg type
+                        if (egg.isPoison) {
+                            glBindVertexArray(poisonEggVAO);
+                            // Make poison eggs more vibrant
+                            glm::vec3 finalColor = egg.color * 1.2f;
+                            glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(finalColor));
+                        }
+                        else {
+                            glBindVertexArray(eggVAO);
+                            glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(egg.color));
+                        }
+
+                        glDrawElements(GL_TRIANGLES, eggIndices.size(), GL_UNSIGNED_INT, 0);
+                    }
                 }
-                else {
-                    glBindVertexArray(eggVAO);
-                    glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(egg.color));
-                }
+            }
 
-                glDrawElements(GL_TRIANGLES, eggIndices.size(), GL_UNSIGNED_INT, 0);
+            // Render miss indicators (Fruit Ninja style) - only in playing state
+            if (!missIndicators.empty() && currentGameState == GAME_PLAYING) {
+                glUseProgram(missShaderProgram);
+
+                // Set view and projection for miss shader
+                glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+                glBindVertexArray(crossVAO);
+
+                for (const auto& indicator : missIndicators) {
+                    glm::mat4 crossModel = glm::mat4(1.0f);
+                    crossModel = glm::translate(crossModel, glm::vec3(indicator.x, 0.2f, indicator.z)); // Position above ground
+                    crossModel = glm::scale(crossModel, glm::vec3(1.5f, 1.5f, 1.5f)); // Scale up the cross
+
+                    // Calculate alpha based on timer (fade out effect)
+                    float alpha = indicator.y / missIndicatorDuration;
+
+                    glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(crossModel));
+                    glUniform1f(glGetUniformLocation(missShaderProgram, "alpha"), alpha);
+
+                    // Draw as lines
+                    glDrawElements(GL_LINES, crossIndices.size(), GL_UNSIGNED_INT, 0);
+                }
             }
         }
 
-        // Render miss indicators (Fruit Ninja style)
-        if (!missIndicators.empty()) {
-            glUseProgram(missShaderProgram);
-
-            // Set view and projection for miss shader
-            glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-            glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-
-            glBindVertexArray(crossVAO);
-
-            for (const auto& indicator : missIndicators) {
-                glm::mat4 crossModel = glm::mat4(1.0f);
-                crossModel = glm::translate(crossModel, glm::vec3(indicator.x, 0.2f, indicator.z)); // Position above ground
-                crossModel = glm::scale(crossModel, glm::vec3(1.5f, 1.5f, 1.5f)); // Scale up the cross
-
-                // Calculate alpha based on timer (fade out effect)
-                float alpha = indicator.y / missIndicatorDuration;
-
-                glUniformMatrix4fv(glGetUniformLocation(missShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(crossModel));
-                glUniform1f(glGetUniformLocation(missShaderProgram, "alpha"), alpha);
-
-                // Draw as lines
-                glDrawElements(GL_LINES, crossIndices.size(), GL_UNSIGNED_INT, 0);
-            }
+        // Render appropriate UI based on game state
+        switch (currentGameState) {
+        case GAME_START:
+            renderStartScreen();
+            break;
+        case GAME_PLAYING:
+            renderHUD();
+            break;
+        case GAME_PAUSED:
+            renderHUD(); // Show HUD behind pause screen
+            renderPauseScreen();
+            break;
+        case GAME_OVER:
+            renderHUD(); // Show HUD behind game over screen
+            renderGameOverScreen();
+            break;
         }
-
-        // Render HUD
-        renderHUD();
 
         // Render ImGui
         ImGui::Render();
