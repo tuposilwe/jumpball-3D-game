@@ -206,6 +206,35 @@ std::map<char, Character> Characters;
 unsigned int textVAO, textVBO;
 unsigned int textShaderProgram;
 
+// Settings system
+const std::string SETTINGS_FILE = "game_settings.dat";
+
+// Settings structure
+struct GameSettings {
+    // Camera settings
+    float cameraDistance;
+    float cameraHeight;
+    float cameraAngle;
+
+    // Sensitivity settings
+    float mouseSensitivity;
+    float joystickSensitivity;
+
+    // Smoothing settings
+    float positionSmoothTime;
+    float rotationSmoothTime;
+    float cameraSmoothTime;
+
+    // Player position (for resuming)
+    glm::vec3 playerPosition;
+    float playerRotation;
+
+    // Game settings
+    float joystickDeadzone;
+};
+
+GameSettings currentSettings;
+
 // Vertex shader source
 const char* vertexShaderSource = R"(
 #version 330 core
@@ -347,6 +376,93 @@ void main()
     color = vec4(textColor, 1.0) * sampled;
 }
 )";
+
+// Settings system functions
+void loadSettings() {
+    std::ifstream file(SETTINGS_FILE, std::ios::binary);
+
+    if (!file.is_open()) {
+        std::cout << "No settings file found. Using default settings." << std::endl;
+
+        // Set default values
+        currentSettings.cameraDistance = 6.0f;
+        currentSettings.cameraHeight = 3.0f;
+        currentSettings.cameraAngle = 0.0f;
+        currentSettings.mouseSensitivity = 0.1f;
+        currentSettings.joystickSensitivity = 2.0f;
+        currentSettings.positionSmoothTime = 0.1f;
+        currentSettings.rotationSmoothTime = 0.05f;
+        currentSettings.cameraSmoothTime = 0.1f;
+        currentSettings.playerPosition = glm::vec3(0.0f, 1.0f, 0.0f);
+        currentSettings.playerRotation = 0.0f;
+        currentSettings.joystickDeadzone = 0.2f;
+
+        return;
+    }
+
+    file.read(reinterpret_cast<char*>(&currentSettings), sizeof(GameSettings));
+    file.close();
+
+    // Apply loaded settings to game variables
+    cameraTargetDistance = currentSettings.cameraDistance;
+    cameraDistance = currentSettings.cameraDistance;
+    cameraTargetHeight = currentSettings.cameraHeight;
+    cameraHeight = currentSettings.cameraHeight;
+    cameraTargetAngle = currentSettings.cameraAngle;
+    cameraAngle = currentSettings.cameraAngle;
+    mouseSensitivity = currentSettings.mouseSensitivity;
+    joystickSensitivity = currentSettings.joystickSensitivity;
+    positionSmoothTime = currentSettings.positionSmoothTime;
+    rotationSmoothTime = currentSettings.rotationSmoothTime;
+    cameraSmoothTime = currentSettings.cameraSmoothTime;
+    playerPos = currentSettings.playerPosition;
+    playerTargetPos = currentSettings.playerPosition;
+    playerRotation = currentSettings.playerRotation;
+    playerRotationTarget = currentSettings.playerRotation;
+    joystickDeadzone = currentSettings.joystickDeadzone;
+
+    std::cout << "Settings loaded successfully!" << std::endl;
+    std::cout << "Player position: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
+}
+
+void saveSettings() {
+    // Update current settings with current values
+    currentSettings.cameraDistance = cameraTargetDistance;
+    currentSettings.cameraHeight = cameraTargetHeight;
+    currentSettings.cameraAngle = cameraTargetAngle;
+    currentSettings.mouseSensitivity = mouseSensitivity;
+    currentSettings.joystickSensitivity = joystickSensitivity;
+    currentSettings.positionSmoothTime = positionSmoothTime;
+    currentSettings.rotationSmoothTime = rotationSmoothTime;
+    currentSettings.cameraSmoothTime = cameraSmoothTime;
+    currentSettings.playerPosition = playerPos;
+    currentSettings.playerRotation = playerRotation;
+    currentSettings.joystickDeadzone = joystickDeadzone;
+
+    std::ofstream file(SETTINGS_FILE, std::ios::binary);
+    if (!file.is_open()) {
+        std::cout << "ERROR: Could not save settings!" << std::endl;
+        return;
+    }
+
+    file.write(reinterpret_cast<const char*>(&currentSettings), sizeof(GameSettings));
+    file.close();
+
+    std::cout << "Settings saved successfully!" << std::endl;
+    std::cout << "Player position saved: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
+}
+
+// Auto-save function to call periodically
+void autoSaveIfNeeded() {
+    static float lastSaveTime = 0.0f;
+    float currentTime = glfwGetTime();
+
+    // Auto-save every 30 seconds during gameplay
+    if (currentGameState == GAME_PLAYING && currentTime - lastSaveTime > 30.0f) {
+        saveSettings();
+        lastSaveTime = currentTime;
+    }
+}
 
 // High score system functions
 void loadHighScores() {
@@ -1145,6 +1261,7 @@ void processInput(GLFWwindow* window) {
     static bool enterKeyPressed = false;
     static bool spaceKeyPressed = false;
     static bool backspaceKeyPressed = false;
+    static bool f5KeyPressed = false;
 
     // High score input handling
     if (showHighScoreInput) {
@@ -1233,6 +1350,17 @@ void processInput(GLFWwindow* window) {
 
         // Don't process other inputs while in high score input mode
         return;
+    }
+
+    // F5 key for quick save
+    if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS) {
+        if (!f5KeyPressed) {
+            saveSettings();
+            f5KeyPressed = true;
+        }
+    }
+    else {
+        f5KeyPressed = false;
     }
 
     // Replace the current ESC handling section with this:
@@ -2288,6 +2416,87 @@ void showCameraSettingsWindow() {
 
     ImGui::Separator();
 
+    if (ImGui::CollapsingHeader("Save/Load Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Manage game settings and player position");
+
+        if (ImGui::Button("Save Current Settings")) {
+            saveSettings();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Load Saved Settings")) {
+            loadSettings();
+            // Update camera after loading
+            updateCamera();
+            updateCameraVectors();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Reset to Defaults")) {
+            // Reset to default values
+            cameraTargetDistance = 6.0f;
+            cameraDistance = 6.0f;
+            cameraTargetHeight = 3.0f;
+            cameraHeight = 3.0f;
+            cameraTargetAngle = 0.0f;
+            cameraAngle = 0.0f;
+            mouseSensitivity = 0.1f;
+            joystickSensitivity = 2.0f;
+            positionSmoothTime = 0.1f;
+            rotationSmoothTime = 0.05f;
+            cameraSmoothTime = 0.1f;
+            playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
+            playerTargetPos = playerPos;
+            playerRotation = 0.0f;
+            playerRotationTarget = 0.0f;
+            joystickDeadzone = 0.2f;
+
+            updateCamera();
+            updateCameraVectors();
+            std::cout << "Settings reset to defaults!" << std::endl;
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Auto-save: Settings are automatically saved every 30 seconds");
+        ImGui::Text("during gameplay and when exiting the game.");
+        ImGui::Text("Quick Save: Press F5 to save settings immediately");
+
+        // Display current player position
+        ImGui::Separator();
+        ImGui::Text("Current Player Position:");
+        ImGui::Text("X: %.2f, Y: %.2f, Z: %.2f", playerPos.x, playerPos.y, playerPos.z);
+        ImGui::Text("Rotation: %.2f radians", playerRotation);
+
+        // Quick position save slots
+        ImGui::Separator();
+        ImGui::Text("Quick Position Slots:");
+
+        static glm::vec3 savedPositions[3] = {
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(5.0f, 1.0f, 5.0f),
+            glm::vec3(-5.0f, 1.0f, -5.0f)
+        };
+
+        for (int i = 0; i < 3; i++) {
+            ImGui::PushID(i);
+            if (ImGui::Button(("Save to Slot " + std::to_string(i + 1)).c_str())) {
+                savedPositions[i] = playerPos;
+                std::cout << "Position saved to slot " << (i + 1) << std::endl;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(("Load Slot " + std::to_string(i + 1)).c_str())) {
+                playerTargetPos = savedPositions[i];
+                playerPos = savedPositions[i];
+                enforceWorldBoundaries(playerTargetPos);
+                enforceWorldBoundaries(playerPos);
+                std::cout << "Position loaded from slot " << (i + 1) << std::endl;
+            }
+            ImGui::PopID();
+        }
+    }
+
     if (ImGui::CollapsingHeader("Camera Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Camera parameters
         ImGui::SliderFloat("Camera Distance", &cameraTargetDistance, 3.0f, 15.0f);
@@ -2499,6 +2708,7 @@ void showCameraSettingsWindow() {
         ImGui::Text("P: Pause/Resume game");
         ImGui::Text("R: Restart game");
         ImGui::Text("F1: Toggle this window");
+        ImGui::Text("F5: Quick save settings");
         ImGui::Text("ESC: Quit / Return to menu");
         ImGui::Text("ENTER/SPACE: Start game from menu");
         ImGui::Text("World Boundaries: Player cannot leave the ground area");
@@ -2533,6 +2743,11 @@ int main() {
     std::cout << std::endl;
     std::cout << "HIGH SCORE SYSTEM: Your best scores are saved automatically!" << std::endl;
     std::cout << std::endl;
+    std::cout << "SETTINGS SYSTEM: Camera and player position are saved automatically!" << std::endl;
+    std::cout << "  - Auto-saves every 30 seconds during gameplay" << std::endl;
+    std::cout << "  - Press F5 for quick manual save" << std::endl;
+    std::cout << "  - Settings are loaded automatically on startup" << std::endl;
+    std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
@@ -2540,6 +2755,7 @@ int main() {
     std::cout << "  - P: Pause/Resume game" << std::endl;
     std::cout << "  - R: Restart game" << std::endl;
     std::cout << "  - F1: Toggle camera settings" << std::endl;
+    std::cout << "  - F5: Quick save settings" << std::endl;
     std::cout << "  - Joystick: Left stick to move, Right stick to look, Triggers to zoom" << std::endl;
     std::cout << "  - ESC: Exit / Return to menu" << std::endl;
     std::cout << "  - ENTER/SPACE: Start game from menu" << std::endl;
@@ -2556,6 +2772,10 @@ int main() {
     loadHighScores();
     std::cout << "High score system initialized. Top score: " << highScore << std::endl;
 
+    // Load saved settings
+    loadSettings();
+    std::cout << "Game settings loaded." << std::endl;
+
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW" << std::endl;
         return -1;
@@ -2569,7 +2789,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES)", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES + SETTINGS SAVE)", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -2751,6 +2971,9 @@ int main() {
             checkJoystickConnection();
             lastJoystickCheck = currentFrame;
         }
+
+        // Auto-save check
+        autoSaveIfNeeded();
 
         processInput(window);
 
@@ -2983,6 +3206,10 @@ int main() {
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+
+    // Save settings before exiting
+    saveSettings();
+    std::cout << "Settings saved on exit." << std::endl;
 
     // Cleanup
     ImGui_ImplOpenGL3_Shutdown();
