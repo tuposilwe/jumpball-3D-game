@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -9,6 +10,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <time.h>
 
 // ImGui includes
 #include "imgui.h"
@@ -154,6 +159,23 @@ struct DeathEffect {
 std::vector<DeathEffect> deathEffects;
 const float DEATH_EFFECT_DURATION = 2.0f;
 const int DEATH_PARTICLES = 20;
+
+// High score system
+int highScore = 0;
+const std::string HIGH_SCORE_FILE = "highscore.dat";
+const int MAX_HIGH_SCORES = 10;
+
+// High score entry structure
+struct HighScoreEntry {
+    std::string playerName;
+    int score;
+    std::string date;
+};
+
+std::vector<HighScoreEntry> highScores;
+bool newHighScoreAchieved = false;
+bool showHighScoreInput = false;
+std::string playerNameInput = "Player";
 
 // Joystick properties
 bool joystickPresent = false;
@@ -325,6 +347,112 @@ void main()
     color = vec4(textColor, 1.0) * sampled;
 }
 )";
+
+// High score system functions
+void loadHighScores() {
+    highScores.clear();
+    std::ifstream file(HIGH_SCORE_FILE);
+
+    if (!file.is_open()) {
+        std::cout << "No high score file found. Creating new one." << std::endl;
+        // Create some default high scores for testing
+        highScores.push_back({ "EGG_MASTER", 500, "2024-01-01" });
+        highScores.push_back({ "CHAMPION", 300, "2024-01-01" });
+        highScores.push_back({ "PLAYER", 200, "2024-01-01" });
+        highScores.push_back({ "BEGINNER", 100, "2024-01-01" });
+        highScores.push_back({ "NEWBIE", 50, "2024-01-01" });
+        return;
+    }
+
+    std::string line;
+    while (std::getline(file, line) && highScores.size() < MAX_HIGH_SCORES) {
+        std::istringstream iss(line);
+        HighScoreEntry entry;
+        if (std::getline(iss, entry.playerName, ',') &&
+            iss >> entry.score &&
+            iss.ignore() && // ignore the comma
+            std::getline(iss, entry.date)) {
+            highScores.push_back(entry);
+        }
+    }
+
+    file.close();
+
+    // Sort by score (descending)
+    std::sort(highScores.begin(), highScores.end(),
+        [](const HighScoreEntry& a, const HighScoreEntry& b) {
+            return a.score > b.score;
+        });
+
+    // Update current high score
+    if (!highScores.empty()) {
+        highScore = highScores[0].score;
+    }
+
+    std::cout << "Loaded " << highScores.size() << " high scores. Top score: " << highScore << std::endl;
+}
+
+void saveHighScores() {
+    std::ofstream file(HIGH_SCORE_FILE);
+    if (!file.is_open()) {
+        std::cout << "ERROR: Could not save high scores!" << std::endl;
+        return;
+    }
+
+    for (const auto& entry : highScores) {
+        file << entry.playerName << "," << entry.score << "," << entry.date << "\n";
+    }
+
+    file.close();
+    std::cout << "High scores saved successfully!" << std::endl;
+}
+
+void addHighScore(const std::string& name, int score) {
+    // Get current date
+    time_t now = time(0);
+    tm* localTime = localtime(&now);
+    std::ostringstream dateStream;
+    dateStream << std::setfill('0') << std::setw(4) << (localTime->tm_year + 1900) << "-"
+        << std::setfill('0') << std::setw(2) << (localTime->tm_mon + 1) << "-"
+        << std::setfill('0') << std::setw(2) << localTime->tm_mday;
+
+    HighScoreEntry newEntry = { name, score, dateStream.str() };
+    highScores.push_back(newEntry);
+
+    // Sort by score (descending)
+    std::sort(highScores.begin(), highScores.end(),
+        [](const HighScoreEntry& a, const HighScoreEntry& b) {
+            return a.score > b.score;
+        });
+
+    // Keep only top scores
+    if (highScores.size() > MAX_HIGH_SCORES) {
+        highScores.resize(MAX_HIGH_SCORES);
+    }
+
+    // Update current high score
+    highScore = highScores[0].score;
+
+    saveHighScores();
+    std::cout << "New high score added: " << name << " - " << score << std::endl;
+}
+
+void checkForHighScore() {
+    if (score > 0 && score > highScore) {
+        newHighScoreAchieved = true;
+        showHighScoreInput = true;
+        std::cout << "NEW HIGH SCORE ACHIEVED: " << score << "! Previous: " << highScore << std::endl;
+    }
+}
+
+void submitHighScore() {
+    if (playerNameInput.empty()) {
+        playerNameInput = "Player";
+    }
+    addHighScore(playerNameInput, score);
+    showHighScoreInput = false;
+    newHighScoreAchieved = false;
+}
 
 // Boundary checking function
 void enforceWorldBoundaries(glm::vec3& position) {
@@ -599,6 +727,7 @@ void killPlayer() {
         // Check for game over due to no lives
         if (lives <= 0) {
             currentGameState = GAME_OVER;
+            checkForHighScore(); // Check if this is a new high score
             std::cout << "GAME OVER! Final Score: " << score << std::endl;
             std::cout << "Reason: No lives remaining!" << std::endl;
         }
@@ -632,6 +761,7 @@ void checkForMissedEggs() {
             // Check for game over due to too many misses
             if (missedEggs >= MAX_MISSES) {
                 currentGameState = GAME_OVER;
+                checkForHighScore(); // Check if this is a new high score
                 std::cout << "GAME OVER! Too many missed eggs! Final Score: " << score << std::endl;
             }
 
@@ -815,6 +945,9 @@ void resetGame() {
     eggSpawnTimer = 0.0f;
     poisonEggSpawnTimer = 0.0f;
     playerRespawnTimer = 0.0f;
+    newHighScoreAchieved = false;
+    showHighScoreInput = false;
+    playerNameInput = "Player";
 
     std::cout << "Game reset! Ready for new game." << std::endl;
 }
@@ -1011,6 +1144,96 @@ void processInput(GLFWwindow* window) {
     static bool rKeyPressed = false;
     static bool enterKeyPressed = false;
     static bool spaceKeyPressed = false;
+    static bool backspaceKeyPressed = false;
+
+    // High score input handling
+    if (showHighScoreInput) {
+        // Handle text input for high score name
+        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+            if (!enterKeyPressed) {
+                submitHighScore();
+                enterKeyPressed = true;
+            }
+        }
+        else {
+            enterKeyPressed = false;
+        }
+
+        // Handle backspace
+        if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS) {
+            if (!backspaceKeyPressed && !playerNameInput.empty()) {
+                playerNameInput.pop_back();
+                backspaceKeyPressed = true;
+            }
+        }
+        else {
+            backspaceKeyPressed = false;
+        }
+
+        // Handle ESC to cancel high score input
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            if (!escKeyPressed) {
+                showHighScoreInput = false;
+                newHighScoreAchieved = false;
+                escKeyPressed = true;
+            }
+        }
+        else {
+            escKeyPressed = false;
+        }
+
+        // Handle regular character input (A-Z, 0-9, space, underscore)
+        float currentFrame = glfwGetTime();
+        for (int key = GLFW_KEY_A; key <= GLFW_KEY_Z; key++) {
+            if (glfwGetKey(window, key) == GLFW_PRESS && playerNameInput.length() < 12) {
+                // Simple debouncing
+                static double lastKeyTime = 0;
+                if (currentFrame - lastKeyTime > 0.15) {
+                    char c = 'A' + (key - GLFW_KEY_A);
+                    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                        glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+                        // Keep uppercase
+                    }
+                    else {
+                        c = tolower(c);
+                    }
+                    playerNameInput += c;
+                    lastKeyTime = currentFrame;
+                }
+            }
+        }
+
+        // Handle numbers
+        for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; key++) {
+            if (glfwGetKey(window, key) == GLFW_PRESS && playerNameInput.length() < 12) {
+                static double lastKeyTime = 0;
+                if (currentFrame - lastKeyTime > 0.15) {
+                    playerNameInput += '0' + (key - GLFW_KEY_0);
+                    lastKeyTime = currentFrame;
+                }
+            }
+        }
+
+        // Handle space and underscore
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && playerNameInput.length() < 12) {
+            static double lastKeyTime = 0;
+            if (currentFrame - lastKeyTime > 0.15) {
+                playerNameInput += ' ';
+                lastKeyTime = currentFrame;
+            }
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS && playerNameInput.length() < 12) {
+            static double lastKeyTime = 0;
+            if (currentFrame - lastKeyTime > 0.15) {
+                playerNameInput += '_';
+                lastKeyTime = currentFrame;
+            }
+        }
+
+        // Don't process other inputs while in high score input mode
+        return;
+    }
 
     // Replace the current ESC handling section with this:
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
@@ -1537,6 +1760,126 @@ void RenderText(std::string text, float x, float y, float scale, glm::vec3 color
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// Render high score input dialog
+void renderHighScoreInput() {
+    if (!showHighScoreInput) return;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Semi-transparent background
+    glDisable(GL_DEPTH_TEST);
+
+    float vertices[] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        SCR_WIDTH, 0.0f, 1.0f, 0.0f,
+        SCR_WIDTH, SCR_HEIGHT, 1.0f, 1.0f,
+        0.0f, SCR_HEIGHT, 0.0f, 1.0f
+    };
+    unsigned int indices[] = { 0, 1, 2, 2, 3, 0 };
+
+    unsigned int tempVAO, tempVBO, tempEBO;
+    glGenVertexArrays(1, &tempVAO);
+    glGenBuffers(1, &tempVBO);
+    glGenBuffers(1, &tempEBO);
+
+    glBindVertexArray(tempVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, tempVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tempEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    unsigned int overlayShader = createShaderProgram(
+        "#version 330 core\n"
+        "layout (location = 0) in vec4 aPos;\n"
+        "void main() { gl_Position = vec4(aPos.xy * 2.0 - 1.0, 0.0, 1.0); }",
+        "#version 330 core\n"
+        "out vec4 FragColor;\n"
+        "void main() { FragColor = vec4(0.0, 0.0, 0.0, 0.8); }"
+    );
+
+    glUseProgram(overlayShader);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    glDeleteProgram(overlayShader);
+    glDeleteVertexArrays(1, &tempVAO);
+    glDeleteBuffers(1, &tempVBO);
+    glDeleteBuffers(1, &tempEBO);
+
+    glEnable(GL_DEPTH_TEST);
+
+    // New high score text
+    std::string newHighScoreText = "NEW HIGH SCORE!";
+    float newWidth = 0;
+    for (char c : newHighScoreText) {
+        Character ch = Characters[c];
+        newWidth += (ch.Advance >> 6) * 0.8f;
+    }
+    float newX = (SCR_WIDTH - newWidth) / 2.0f;
+    RenderText(newHighScoreText, newX, SCR_HEIGHT * 0.7f, 0.8f, glm::vec3(1.0f, 1.0f, 0.0f));
+
+    // Score text
+    std::string scoreText = "Score: " + std::to_string(score);
+    float scoreWidth = 0;
+    for (char c : scoreText) {
+        Character ch = Characters[c];
+        scoreWidth += (ch.Advance >> 6) * 0.5f;
+    }
+    float scoreX = (SCR_WIDTH - scoreWidth) / 2.0f;
+    RenderText(scoreText, scoreX, SCR_HEIGHT * 0.6f, 0.5f, glm::vec3(1.0f, 1.0f, 1.0f));
+
+    // Enter name prompt
+    std::string namePrompt = "Enter your name:";
+    float promptWidth = 0;
+    for (char c : namePrompt) {
+        Character ch = Characters[c];
+        promptWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float promptX = (SCR_WIDTH - promptWidth) / 2.0f;
+    RenderText(namePrompt, promptX, SCR_HEIGHT * 0.5f, 0.4f, glm::vec3(0.7f, 0.7f, 1.0f));
+
+    // Player name input (display only)
+    std::string displayName = playerNameInput + "_";
+    // Blinking cursor effect
+    if (static_cast<int>(glfwGetTime() * 2) % 2 == 0) {
+        displayName = playerNameInput + "_";
+    }
+    else {
+        displayName = playerNameInput + " ";
+    }
+
+    float nameWidth = 0;
+    for (char c : displayName) {
+        Character ch = Characters[c];
+        nameWidth += (ch.Advance >> 6) * 0.5f;
+    }
+    float nameX = (SCR_WIDTH - nameWidth) / 2.0f;
+    RenderText(displayName, nameX, SCR_HEIGHT * 0.45f, 0.5f, glm::vec3(1.0f, 0.8f, 0.2f));
+
+    // Instructions
+    std::string instruction1 = "Press ENTER to submit";
+    float inst1Width = 0;
+    for (char c : instruction1) {
+        Character ch = Characters[c];
+        inst1Width += (ch.Advance >> 6) * 0.3f;
+    }
+    float inst1X = (SCR_WIDTH - inst1Width) / 2.0f;
+    RenderText(instruction1, inst1X, SCR_HEIGHT * 0.35f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
+
+    std::string instruction2 = "Press BACKSPACE to delete, ESC to cancel";
+    float inst2Width = 0;
+    for (char c : instruction2) {
+        Character ch = Characters[c];
+        inst2Width += (ch.Advance >> 6) * 0.25f;
+    }
+    float inst2X = (SCR_WIDTH - inst2Width) / 2.0f;
+    RenderText(instruction2, inst2X, SCR_HEIGHT * 0.32f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
+
+    glDisable(GL_BLEND);
+}
+
 // Render Start Screen
 void renderStartScreen() {
     glEnable(GL_BLEND);
@@ -1562,6 +1905,16 @@ void renderStartScreen() {
     float subtitleX = (SCR_WIDTH - subtitleWidth) / 2.0f;
     RenderText(subtitleText, subtitleX, SCR_HEIGHT * 0.6f, 0.5f, glm::vec3(1.0f, 0.5f, 0.0f));
 
+    // High score display
+    std::string highScoreText = "High Score: " + std::to_string(highScore);
+    float highScoreWidth = 0;
+    for (char c : highScoreText) {
+        Character ch = Characters[c];
+        highScoreWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float highScoreX = (SCR_WIDTH - highScoreWidth) / 2.0f;
+    RenderText(highScoreText, highScoreX, SCR_HEIGHT * 0.5f, 0.4f, glm::vec3(0.0f, 1.0f, 1.0f));
+
     // Instructions
     std::string instruction1 = "Collect colorful eggs, avoid purple poison eggs!";
     float inst1Width = 0;
@@ -1570,7 +1923,7 @@ void renderStartScreen() {
         inst1Width += (ch.Advance >> 6) * 0.3f;
     }
     float inst1X = (SCR_WIDTH - inst1Width) / 2.0f;
-    RenderText(instruction1, inst1X, SCR_HEIGHT * 0.45f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
+    RenderText(instruction1, inst1X, SCR_HEIGHT * 0.4f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
 
     std::string instruction2 = "You can only miss " + std::to_string(MAX_MISSES) + " eggs total!";
     float inst2Width = 0;
@@ -1579,7 +1932,7 @@ void renderStartScreen() {
         inst2Width += (ch.Advance >> 6) * 0.3f;
     }
     float inst2X = (SCR_WIDTH - inst2Width) / 2.0f;
-    RenderText(instruction2, inst2X, SCR_HEIGHT * 0.4f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
+    RenderText(instruction2, inst2X, SCR_HEIGHT * 0.37f, 0.3f, glm::vec3(0.8f, 0.8f, 0.8f));
 
     // Controls
     std::string controlsTitle = "CONTROLS:";
@@ -1598,7 +1951,7 @@ void renderStartScreen() {
         ctrl1Width += (ch.Advance >> 6) * 0.25f;
     }
     float ctrl1X = (SCR_WIDTH - ctrl1Width) / 2.0f;
-    RenderText(controls1, ctrl1X, SCR_HEIGHT * 0.25f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
+    RenderText(controls1, ctrl1X, SCR_HEIGHT * 0.27f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
 
     std::string controls2 = "P: Pause   |   R: Restart   |   F1: Settings   |   ESC: Quit";
     float ctrl2Width = 0;
@@ -1607,7 +1960,7 @@ void renderStartScreen() {
         ctrl2Width += (ch.Advance >> 6) * 0.25f;
     }
     float ctrl2X = (SCR_WIDTH - ctrl2Width) / 2.0f;
-    RenderText(controls2, ctrl2X, SCR_HEIGHT * 0.22f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
+    RenderText(controls2, ctrl2X, SCR_HEIGHT * 0.24f, 0.25f, glm::vec3(0.7f, 0.7f, 0.7f));
 
     // Start prompt
     std::string startText = "Press ENTER or SPACE to Start";
@@ -1712,6 +2065,11 @@ void renderPauseScreen() {
 
 // Render Game Over Screen
 void renderGameOverScreen() {
+    if (showHighScoreInput) {
+        renderHighScoreInput();
+        return;
+    }
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -1768,7 +2126,7 @@ void renderGameOverScreen() {
         gameOverWidth += (ch.Advance >> 6) * 1.0f;
     }
     float gameOverX = (SCR_WIDTH - gameOverWidth) / 2.0f;
-    RenderText(gameOverText, gameOverX, SCR_HEIGHT * 0.7f, 1.0f, glm::vec3(1.0f, 0.0f, 0.0f));
+    RenderText(gameOverText, gameOverX, SCR_HEIGHT * 0.8f, 1.0f, glm::vec3(1.0f, 0.0f, 0.0f));
 
     // Final score
     std::string scoreText = "Final Score: " + std::to_string(score);
@@ -1778,7 +2136,17 @@ void renderGameOverScreen() {
         scoreWidth += (ch.Advance >> 6) * 0.5f;
     }
     float scoreX = (SCR_WIDTH - scoreWidth) / 2.0f;
-    RenderText(scoreText, scoreX, SCR_HEIGHT * 0.55f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
+    RenderText(scoreText, scoreX, SCR_HEIGHT * 0.7f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
+
+    // High score
+    std::string highScoreText = "High Score: " + std::to_string(highScore);
+    float highScoreWidth = 0;
+    for (char c : highScoreText) {
+        Character ch = Characters[c];
+        highScoreWidth += (ch.Advance >> 6) * 0.4f;
+    }
+    float highScoreX = (SCR_WIDTH - highScoreWidth) / 2.0f;
+    RenderText(highScoreText, highScoreX, SCR_HEIGHT * 0.65f, 0.4f, glm::vec3(0.0f, 1.0f, 1.0f));
 
     // Game over reason
     std::string reasonText;
@@ -1794,7 +2162,37 @@ void renderGameOverScreen() {
         reasonWidth += (ch.Advance >> 6) * 0.4f;
     }
     float reasonX = (SCR_WIDTH - reasonWidth) / 2.0f;
-    RenderText(reasonText, reasonX, SCR_HEIGHT * 0.45f, 0.4f, glm::vec3(1.0f, 0.5f, 0.5f));
+    RenderText(reasonText, reasonX, SCR_HEIGHT * 0.55f, 0.4f, glm::vec3(1.0f, 0.5f, 0.5f));
+
+    // Top 3 high scores
+    if (!highScores.empty()) {
+        std::string highScoresTitle = "TOP SCORES:";
+        float titleWidth = 0;
+        for (char c : highScoresTitle) {
+            Character ch = Characters[c];
+            titleWidth += (ch.Advance >> 6) * 0.4f;
+        }
+        float titleX = (SCR_WIDTH - titleWidth) / 2.0f;
+        RenderText(highScoresTitle, titleX, SCR_HEIGHT * 0.45f, 0.4f, glm::vec3(0.3f, 0.8f, 1.0f));
+
+        // Display top 3 scores
+        for (int i = 0; i < std::min(3, (int)highScores.size()); i++) {
+            std::string scoreEntry = std::to_string(i + 1) + ". " + highScores[i].playerName + " - " + std::to_string(highScores[i].score);
+            float entryWidth = 0;
+            for (char c : scoreEntry) {
+                Character ch = Characters[c];
+                entryWidth += (ch.Advance >> 6) * 0.3f;
+            }
+            float entryX = (SCR_WIDTH - entryWidth) / 2.0f;
+            float yPos = SCR_HEIGHT * 0.4f - i * 30.0f;
+
+            // Highlight if this is the current player's new score
+            glm::vec3 color = (newHighScoreAchieved && i == 0 && highScores[i].score == score) ?
+                glm::vec3(1.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 1.0f, 1.0f);
+
+            RenderText(scoreEntry, entryX, yPos, 0.3f, color);
+        }
+    }
 
     // Restart prompt
     std::string restartText = "Press R to Play Again";
@@ -1804,7 +2202,7 @@ void renderGameOverScreen() {
         restartWidth += (ch.Advance >> 6) * 0.4f;
     }
     float restartX = (SCR_WIDTH - restartWidth) / 2.0f;
-    RenderText(restartText, restartX, SCR_HEIGHT * 0.3f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+    RenderText(restartText, restartX, SCR_HEIGHT * 0.2f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
 
     // Return to menu prompt
     std::string menuText = "Press ESC for Main Menu";
@@ -1814,7 +2212,7 @@ void renderGameOverScreen() {
         menuWidth += (ch.Advance >> 6) * 0.3f;
     }
     float menuX = (SCR_WIDTH - menuWidth) / 2.0f;
-    RenderText(menuText, menuX, SCR_HEIGHT * 0.25f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
+    RenderText(menuText, menuX, SCR_HEIGHT * 0.15f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
 
     glDisable(GL_BLEND);
 }
@@ -1831,15 +2229,19 @@ void renderHUD() {
     std::string scoreText = "SCORE: " + std::to_string(score);
     RenderText(scoreText, 25.0f, SCR_HEIGHT - 50.0f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
 
-    // Render lives in top-left below score
+    // Render high score in top-left below score
+    std::string highScoreText = "HIGH: " + std::to_string(highScore);
+    RenderText(highScoreText, 25.0f, SCR_HEIGHT - 90.0f, 0.5f, glm::vec3(0.0f, 1.0f, 1.0f));
+
+    // Render lives in top-left below high score
     std::string livesText = "LIVES: " + std::to_string(lives);
     glm::vec3 livesColor = (lives <= 1) ? glm::vec3(1.0f, 0.3f, 0.3f) : glm::vec3(0.3f, 1.0f, 0.3f);
-    RenderText(livesText, 25.0f, SCR_HEIGHT - 90.0f, 0.5f, livesColor);
+    RenderText(livesText, 25.0f, SCR_HEIGHT - 130.0f, 0.5f, livesColor);
 
     // Render misses in top-left below lives
     std::string missesText = "MISSES: " + std::to_string(missedEggs) + "/" + std::to_string(MAX_MISSES);
     glm::vec3 missesColor = (missedEggs >= MAX_MISSES - 1) ? glm::vec3(1.0f, 0.3f, 0.3f) : glm::vec3(1.0f, 1.0f, 1.0f);
-    RenderText(missesText, 25.0f, SCR_HEIGHT - 130.0f, 0.5f, missesColor);
+    RenderText(missesText, 25.0f, SCR_HEIGHT - 170.0f, 0.5f, missesColor);
 
     // Render respawn timer if player is dead but game isn't over
     if (!playerAlive && currentGameState == GAME_PLAYING) {
@@ -2026,6 +2428,29 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("High Scores")) {
+        ImGui::Text("Current High Score: %d", highScore);
+        ImGui::Separator();
+
+        for (int i = 0; i < highScores.size(); i++) {
+            ImGui::Text("%d. %s - %d", i + 1, highScores[i].playerName.c_str(), highScores[i].score);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(%s)", highScores[i].date.c_str());
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Clear High Scores")) {
+            highScores.clear();
+            highScore = 0;
+            saveHighScores();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Add Test Score")) {
+            addHighScore("TEST", 100);
+        }
+    }
+
     if (ImGui::CollapsingHeader("Joystick settings")) {
         ImGui::SliderFloat("Joystick Deadzone", &joystickDeadzone, 0.0f, 0.5f);
 
@@ -2106,6 +2531,8 @@ int main() {
     std::cout << "  - They start chasing after 1 second" << std::endl;
     std::cout << "  - Adjust chase speed in F1 settings" << std::endl;
     std::cout << std::endl;
+    std::cout << "HIGH SCORE SYSTEM: Your best scores are saved automatically!" << std::endl;
+    std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
     std::cout << "  - Mouse: Look around" << std::endl;
@@ -2125,6 +2552,10 @@ int main() {
     // Seed random number generator
     srand(static_cast<unsigned int>(time(nullptr)));
 
+    // Initialize high score system
+    loadHighScores();
+    std::cout << "High score system initialized. Top score: " << highScore << std::endl;
+
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW" << std::endl;
         return -1;
@@ -2138,7 +2569,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING)", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES)", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -2588,5 +3019,6 @@ int main() {
     glfwTerminate();
 
     std::cout << "Application terminated successfully! Final Score: " << score << std::endl;
+    std::cout << "High Score: " << highScore << std::endl;
     return 0;
 }
