@@ -61,6 +61,12 @@ struct Egg {
     bool spawning;
     bool despawning;
     bool isPoison; // New: distinguishes between collectible and poison eggs
+
+    // New AI properties for chasing
+    glm::vec3 velocity;
+    float chaseSpeed;
+    bool isChasing;
+    float chaseStartTime;
 };
 
 std::vector<Egg> eggs;
@@ -73,7 +79,7 @@ const int MAX_EGGS = 10;
 // Poison egg properties
 float poisonEggSpawnTimer = 0.0f;
 const float POISON_EGG_SPAWN_INTERVAL = 6.0f;
-const float POISON_EGG_LIFESPAN = 3.0f;
+const float POISON_EGG_LIFESPAN = 6.0f;
 const float POISON_EGG_RADIUS = 0.6f;
 const int MAX_POISON_EGGS = 5;
 
@@ -400,6 +406,13 @@ void spawnEgg() {
         newEgg.spawning = true;
         newEgg.despawning = false;
         newEgg.isPoison = false;
+
+        // Initialize AI properties for regular eggs (not used, but for consistency)
+        newEgg.velocity = glm::vec3(0.0f);
+        newEgg.chaseSpeed = 0.0f;
+        newEgg.isChasing = false;
+        newEgg.chaseStartTime = 0.0f;
+
         eggs.push_back(newEgg);
         std::cout << "Egg spawned at (" << newEgg.position.x << ", " << newEgg.position.z << ")" << std::endl;
     }
@@ -427,6 +440,13 @@ void spawnPoisonEgg() {
         poisonEgg.spawning = true;
         poisonEgg.despawning = false;
         poisonEgg.isPoison = true;
+
+        // New AI initialization
+        poisonEgg.velocity = glm::vec3(0.0f);
+        poisonEgg.chaseSpeed = 3.0f; // Adjust this value for different difficulty
+        poisonEgg.isChasing = false;
+        poisonEgg.chaseStartTime = 1.0f; // Start chasing after 1 second
+
         eggs.push_back(poisonEgg);
         std::cout << "POISON EGG spawned at (" << poisonEgg.position.x << ", " << poisonEgg.position.z << ")" << std::endl;
     }
@@ -665,6 +685,35 @@ void updateEggs() {
             // Update life timer
             egg.lifeTimer -= deltaTime;
 
+            // AI CHASING BEHAVIOR FOR POISON EGGS
+            if (egg.isPoison && playerAlive && currentGameState == GAME_PLAYING) {
+                // Start chasing after initial delay and if spawn animation is complete
+                if (!egg.spawning && egg.lifeTimer < (POISON_EGG_LIFESPAN - egg.chaseStartTime)) {
+                    egg.isChasing = true;
+
+                    // Calculate direction to player
+                    glm::vec3 direction = playerPos - egg.position;
+                    direction.y = 0.0f; // Keep movement on horizontal plane
+
+                    // Normalize direction and apply speed
+                    if (glm::length(direction) > 0.1f) {
+                        direction = glm::normalize(direction);
+                        egg.velocity = direction * egg.chaseSpeed;
+
+                        // Update position with velocity
+                        egg.position += egg.velocity * deltaTime;
+
+                        // Optional: Add some vertical bobbing for visual effect
+                        egg.position.y = EGG_RADIUS + sin(glfwGetTime() * 8.0f) * 0.1f;
+                    }
+                }
+                else if (egg.spawning) {
+                    // Reset velocity during spawn animation
+                    egg.velocity = glm::vec3(0.0f);
+                    egg.isChasing = false;
+                }
+            }
+
             // Update pulse animation (continuous pulsing)
             float pulseSpeed = egg.isPoison ? POISON_PULSE_SPEED : PULSE_SPEED;
             egg.pulseFactor = sin(glfwGetTime() * pulseSpeed) * 0.1f + 1.0f; // Pulse between 0.9 and 1.1
@@ -688,6 +737,11 @@ void updateEggs() {
             float despawnDuration = egg.isPoison ? DESPAWN_ANIMATION_DURATION * 0.7f : DESPAWN_ANIMATION_DURATION;
             if (egg.lifeTimer <= despawnDuration && !egg.despawning) {
                 egg.despawning = true;
+                // Stop chasing when despawning starts
+                if (egg.isPoison) {
+                    egg.isChasing = false;
+                    egg.velocity = glm::vec3(0.0f);
+                }
             }
 
             if (egg.despawning) {
@@ -743,7 +797,6 @@ void updatePlayer() {
         }
     }
 }
-
 
 // Reset game function
 void resetGame() {
@@ -950,8 +1003,6 @@ void processJoystickInput() {
     updateCamera();
 }
 
-
-
 // In the processInput function, replace the ESC handling:
 void processInput(GLFWwindow* window) {
     // Handle ESC key with different behaviors based on game state
@@ -989,8 +1040,6 @@ void processInput(GLFWwindow* window) {
     else {
         escKeyPressed = false;
     }
-
-
 
     // Toggle ImGui settings window with F1
     static bool f1KeyPressed = false;
@@ -1152,7 +1201,6 @@ void processInput(GLFWwindow* window) {
         }
     }
 }
-
 
 // Check for joystick connection
 void checkJoystickConnection() {
@@ -1932,6 +1980,38 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("AI Settings")) {
+        static float chaseSpeed = 3.0f;
+        static float chaseDelay = 1.0f;
+
+        if (ImGui::SliderFloat("Poison Egg Chase Speed", &chaseSpeed, 1.0f, 8.0f)) {
+            // Update all active poison eggs
+            for (auto& egg : eggs) {
+                if (egg.active && egg.isPoison) {
+                    egg.chaseSpeed = chaseSpeed;
+                }
+            }
+        }
+
+        if (ImGui::SliderFloat("Chase Start Delay", &chaseDelay, 0.0f, 3.0f)) {
+            // Update all active poison eggs
+            for (auto& egg : eggs) {
+                if (egg.active && egg.isPoison) {
+                    egg.chaseStartTime = chaseDelay;
+                }
+            }
+        }
+
+        // Display current chasing status
+        int chasingCount = 0;
+        for (const auto& egg : eggs) {
+            if (egg.active && egg.isPoison && egg.isChasing) {
+                chasingCount++;
+            }
+        }
+        ImGui::Text("Currently Chasing: %d", chasingCount);
+    }
+
     if (ImGui::CollapsingHeader("Effect System")) {
         ImGui::Text("Collection Effects: %zu", collectionEffects.size());
         ImGui::Text("Death Effects: %zu", deathEffects.size());
@@ -2005,6 +2085,10 @@ void showCameraSettingsWindow() {
         ImGui::Text("  - Red X appears where you miss an egg");
         ImGui::Text("  - Colorful burst effects when collecting eggs");
         ImGui::Text("  - Purple explosion effects when hitting poison eggs");
+        ImGui::Text("NEW AI FEATURE:");
+        ImGui::Text("  - Poison eggs now chase the player!");
+        ImGui::Text("  - They start chasing after a short delay");
+        ImGui::Text("  - Adjust chase speed and delay in AI Settings");
     }
     ImGui::End();
 }
@@ -2017,6 +2101,10 @@ int main() {
     std::cout << "  - Red X appears where you miss an egg" << std::endl;
     std::cout << "  - Colorful burst effects when collecting eggs" << std::endl;
     std::cout << "  - Purple explosion effects when hitting poison eggs" << std::endl;
+    std::cout << std::endl;
+    std::cout << "NEW AI FEATURE: Poison eggs now chase the player!" << std::endl;
+    std::cout << "  - They start chasing after 1 second" << std::endl;
+    std::cout << "  - Adjust chase speed in F1 settings" << std::endl;
     std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
@@ -2032,6 +2120,7 @@ int main() {
     std::cout << "Egg System:" << std::endl;
     std::cout << "  - Regular eggs (various colors): +10 points, must collect them all!" << std::endl;
     std::cout << "  - Poison eggs (purple): -1 life, avoid at all costs!" << std::endl;
+    std::cout << "  - POISON EGGS NOW CHASE YOU! Be careful!" << std::endl;
 
     // Seed random number generator
     srand(static_cast<unsigned int>(time(nullptr)));
@@ -2049,7 +2138,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style!", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING)", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -2333,8 +2422,10 @@ int main() {
                         // Choose the appropriate VAO based on egg type
                         if (egg.isPoison) {
                             glBindVertexArray(poisonEggVAO);
-                            // Make poison eggs more vibrant
-                            glm::vec3 finalColor = egg.color * 1.2f;
+                            // Make poison eggs more vibrant, especially when chasing
+                            glm::vec3 finalColor = egg.isChasing ?
+                                glm::mix(egg.color, glm::vec3(1.0f, 0.0f, 0.0f), 0.3f) :
+                                egg.color * 1.2f;
                             glUniform3fv(glGetUniformLocation(shaderProgram, "objectColor"), 1, glm::value_ptr(finalColor));
                         }
                         else {
