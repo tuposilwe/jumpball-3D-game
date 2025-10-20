@@ -24,6 +24,10 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+// STB Image for texture loading
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
+
 // Window dimensions
 unsigned int SCR_WIDTH = 800;
 unsigned int SCR_HEIGHT = 600;
@@ -235,6 +239,11 @@ struct GameSettings {
 
 GameSettings currentSettings;
 
+// Egg icon texture and rendering
+unsigned int eggIconTexture;
+unsigned int iconVAO, iconVBO;
+unsigned int iconShaderProgram;
+
 // Vertex shader source
 const char* vertexShaderSource = R"(
 #version 330 core
@@ -376,6 +385,46 @@ void main()
     color = vec4(textColor, 1.0) * sampled;
 }
 )";
+
+// Icon shader sources
+const char* iconVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+uniform mat4 projection;
+
+void main()
+{
+    gl_Position = projection * vec4(aPos.x, aPos.y, 0.0, 1.0);
+    TexCoords = aTexCoords;
+}
+)";
+
+const char* iconFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+in vec2 TexCoords;
+
+uniform sampler2D texture1;
+uniform vec3 iconColor;
+
+void main()
+{
+    vec4 texColor = texture(texture1, TexCoords);
+    
+    // If texture has color, use it. Otherwise use the uniform color.
+    if(texColor.a < 0.1)
+        discard;
+    
+    // Multiply texture color with uniform color for flexibility
+    FragColor = vec4(texColor.rgb * iconColor, texColor.a);
+}
+)";
+
 
 // Settings system functions
 void loadSettings() {
@@ -1077,6 +1126,10 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glUseProgram(textShaderProgram);
     glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(SCR_WIDTH), 0.0f, static_cast<float>(SCR_HEIGHT));
     glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+    // Update icon projection matrix
+    glUseProgram(iconShaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(iconShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 }
 
 // Update camera vectors based on current camera angle
@@ -1613,6 +1666,175 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
     return shaderProgram;
 }
 
+// Texture loading function
+unsigned int loadTexture(const char* path) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
+
+    int width, height, nrComponents;
+
+    // Flip texture vertically for OpenGL
+    stbi_set_flip_vertically_on_load(true);
+
+    unsigned char* data = stbi_load(path, &width, &height, &nrComponents, 0);
+    if (data) {
+        std::cout << "Texture loaded successfully: " << path << " (" << width << "x" << height << ", " << nrComponents << " components)" << std::endl;
+
+        GLenum format;
+        if (nrComponents == 1)
+            format = GL_RED;
+        else if (nrComponents == 3)
+            format = GL_RGB;
+        else if (nrComponents == 4)
+            format = GL_RGBA;
+        else {
+            std::cout << "Unsupported number of components: " << nrComponents << std::endl;
+            format = GL_RGBA;
+        }
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        stbi_image_free(data);
+    }
+    else {
+        std::cout << "ERROR: Texture failed to load at path: " << path << std::endl;
+        std::cout << "STB Image error: " << stbi_failure_reason() << std::endl;
+
+        // Create a fallback colored texture (red and white checkered pattern)
+        unsigned char fallbackData[] = {
+            255, 0, 0, 255,     255, 255, 255, 255,
+            255, 255, 255, 255, 255, 0, 0, 255
+        };
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, fallbackData);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+        std::cout << "Created fallback texture for: " << path << std::endl;
+    }
+
+    return textureID;
+}
+
+// Initialize icon rendering
+void initIconRendering() {
+    // Compile shader
+    iconShaderProgram = createShaderProgram(iconVertexShaderSource, iconFragmentShaderSource);
+
+    // Create VAO and VBO
+    glGenVertexArrays(1, &iconVAO);
+    glGenBuffers(1, &iconVBO);
+
+    glBindVertexArray(iconVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, iconVBO);
+
+    // Initialize with some data (will be updated each frame)
+    float vertices[] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+    // Set vertex attributes
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+
+    glBindVertexArray(0);
+
+    // Load texture
+    std::cout << "Loading egg icon texture..." << std::endl;
+    eggIconTexture = loadTexture("pokemon.png");
+
+    // Test if texture is valid
+    GLint textureWidth, textureHeight;
+    glBindTexture(GL_TEXTURE_2D, eggIconTexture);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &textureWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &textureHeight);
+    std::cout << "Egg icon texture dimensions: " << textureWidth << "x" << textureHeight << std::endl;
+
+    if (textureWidth == 0 || textureHeight == 0) {
+        std::cout << "WARNING: Egg icon texture appears to be invalid!" << std::endl;
+    }
+}
+
+// Render egg icon
+void RenderEggIcon(float x, float y, float width, float height, glm::vec3 color) {
+    // Save current state
+    GLint last_program, last_texture, last_array_buffer, last_vertex_array;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+
+    // Enable blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+
+    // Use icon shader
+    glUseProgram(iconShaderProgram);
+
+    // Set up orthographic projection
+    glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(SCR_WIDTH), 0.0f, static_cast<float>(SCR_HEIGHT));
+    glUniformMatrix4fv(glGetUniformLocation(iconShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform3f(glGetUniformLocation(iconShaderProgram, "iconColor"), color.x, color.y, color.z);
+
+    // Bind texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, eggIconTexture);
+
+    // Bind VAO
+    glBindVertexArray(iconVAO);
+
+    // Calculate vertices for the quad at the specified position and size
+    float x0 = x;
+    float x1 = x + width;
+    float y0 = y;
+    float y1 = y + height;
+
+    float vertices[] = {
+        // positions    // texCoords
+        x0, y1, 0.0f, 1.0f,  // top-left
+        x0, y0, 0.0f, 0.0f,  // bottom-left  
+        x1, y0, 1.0f, 0.0f,  // bottom-right
+
+        x0, y1, 0.0f, 1.0f,  // top-left
+        x1, y0, 1.0f, 0.0f,  // bottom-right
+        x1, y1, 1.0f, 1.0f   // top-right
+    };
+
+    // Update VBO
+    glBindBuffer(GL_ARRAY_BUFFER, iconVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+    // Draw
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Restore state
+    glBindVertexArray(last_vertex_array);
+    glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+    glBindTexture(GL_TEXTURE_2D, last_texture);
+    glUseProgram(last_program);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+}
+
 // Function to generate sphere vertices and indices
 void generateSphere(float radius, int sectors, int stacks, std::vector<float>& vertices, std::vector<unsigned int>& indices) {
     const float PI = 3.14159265359f;
@@ -1840,7 +2062,22 @@ void initTextRendering() {
 }
 
 // Render text function
+// Render text function - ENHANCED VERSION
 void RenderText(std::string text, float x, float y, float scale, glm::vec3 color) {
+    // Save current state
+    GLint last_program;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+    GLint last_texture;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+    GLint last_array_buffer;
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+    GLint last_vertex_array;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+
+    // Enable blending for text
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     // Activate corresponding render state
     glUseProgram(textShaderProgram);
     glUniform3f(glGetUniformLocation(textShaderProgram, "textColor"), color.x, color.y, color.z);
@@ -1884,8 +2121,13 @@ void RenderText(std::string text, float x, float y, float scale, glm::vec3 color
         x += (ch.Advance >> 6) * scale; // Bitshift by 6 to get value in pixels (2^6 = 64)
     }
 
-    glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    // Restore state
+    glBindVertexArray(last_vertex_array);
+    glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+    glBindTexture(GL_TEXTURE_2D, last_texture);
+    glUseProgram(last_program);
+
+    glDisable(GL_BLEND);
 }
 
 // Render high score input dialog
@@ -2345,17 +2587,25 @@ void renderGameOverScreen() {
     glDisable(GL_BLEND);
 }
 
-// Render HUD function
+// Render HUD function with egg icon
 void renderHUD() {
     // Only show HUD during gameplay
     if (currentGameState != GAME_PLAYING) return;
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Save current OpenGL state
+    GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST); // Disable depth test for 2D rendering
 
-    // Render score in top-left
-    std::string scoreText = "SCORE: " + std::to_string(score);
-    RenderText(scoreText, 25.0f, SCR_HEIGHT - 50.0f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
+    // Try different positions and sizes for the egg icon
+    float iconWidth = 50.0f;
+    float iconHeight = 40.0f;
+
+    // Position 1: Top-left corner (most visible)
+    RenderEggIcon(10.0f, SCR_HEIGHT - 50.0f, iconWidth, iconHeight, glm::vec3(1.0f, 1.0f, 1.0f));
+
+    // Then render all text
+    std::string scoreText = ":" + std::to_string(score);
+    RenderText(scoreText, iconWidth + 10.0f, SCR_HEIGHT - 40.0f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
 
     // Render high score in top-left below score
     std::string highScoreText = "HIGH: " + std::to_string(highScore);
@@ -2387,7 +2637,10 @@ void renderHUD() {
     std::string controlsText = "WASD: Move  |  Mouse: Look  |  Scroll: Zoom  |  P: Pause  |  F1: Settings  |  ESC: Quit";
     RenderText(controlsText, 25.0f, 30.0f, 0.3f, glm::vec3(0.7f, 0.7f, 0.7f));
 
-    glDisable(GL_BLEND);
+    // Restore depth test state
+    if (depth_test_enabled) {
+        glEnable(GL_DEPTH_TEST);
+    }
 }
 
 void showCameraSettingsWindow() {
@@ -2838,6 +3091,9 @@ int main() {
     // Initialize text rendering
     initTextRendering();
 
+    // Initialize icon rendering
+    initIconRendering();
+
     // Generate sphere geometry for player
     std::vector<float> sphereVertices;
     std::vector<unsigned int> sphereIndices;
@@ -3223,6 +3479,12 @@ int main() {
     for (auto& character : Characters) {
         glDeleteTextures(1, &character.second.TextureID);
     }
+
+    // Clean up icon rendering resources
+    glDeleteTextures(1, &eggIconTexture);
+    glDeleteVertexArrays(1, &iconVAO);
+    glDeleteBuffers(1, &iconVBO);
+    glDeleteProgram(iconShaderProgram);
 
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteVertexArrays(1, &eggVAO);
