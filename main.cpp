@@ -911,13 +911,14 @@ void respawnPlayer() {
 }
 
 // Check for missed eggs (Fruit Ninja style)
+// In the checkForMissedEggs() function, update the game over condition:
 void checkForMissedEggs() {
     for (auto it = eggs.begin(); it != eggs.end(); ) {
         if (it->active && !it->isPoison && it->lifeTimer <= 0.0f) {
             // Egg expired without being collected - this is a miss!
             missedEggs++;
 
-            // Add miss indicator at egg position
+            // Add miss indicator at egg position (world space)
             glm::vec3 missIndicator = glm::vec3(it->position.x, missIndicatorDuration, it->position.z);
             missIndicators.push_back(missIndicator);
 
@@ -2062,7 +2063,6 @@ void initTextRendering() {
 }
 
 // Render text function
-// Render text function - ENHANCED VERSION
 void RenderText(std::string text, float x, float y, float scale, glm::vec3 color) {
     // Save current state
     GLint last_program;
@@ -2587,7 +2587,103 @@ void renderGameOverScreen() {
     glDisable(GL_BLEND);
 }
 
-// Render HUD function with egg icon
+// Render a miss cross in the HUD - BIG X-SHAPED VERSION
+void renderMissCrossHUD(float x, float y, float size, glm::vec3 color) {
+    // Save current state
+    GLint last_program, last_texture, last_array_buffer, last_vertex_array;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+
+    // Enable blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+
+    // Create a simple shader for HUD elements
+    const char* hudVertexShaderSource = R"(
+        #version 330 core
+        layout (location = 0) in vec2 aPos;
+        uniform mat4 projection;
+        uniform mat4 model;
+        void main() {
+            gl_Position = projection * model * vec4(aPos, 0.0, 1.0);
+        }
+    )";
+
+    const char* hudFragmentShaderSource = R"(
+        #version 330 core
+        out vec4 FragColor;
+        uniform vec3 crossColor;
+        void main() {
+            FragColor = vec4(crossColor, 1.0);
+        }
+    )";
+
+    static unsigned int hudShaderProgram = 0;
+    static unsigned int crossVAO = 0, crossVBO = 0;
+
+    // Initialize shader and buffers if not already done
+    if (hudShaderProgram == 0) {
+        hudShaderProgram = createShaderProgram(hudVertexShaderSource, hudFragmentShaderSource);
+
+        // Create X-shaped cross geometry with LARGER coordinates
+        float crossVertices[] = {
+            // First diagonal line (top-left to bottom-right)
+            -0.8f,  0.8f,  // top-left - INCREASED from -0.5, 0.5
+             0.8f, -0.8f,  // bottom-right - INCREASED from 0.5, -0.5
+
+             // Second diagonal line (top-right to bottom-left)
+              0.8f,  0.8f,  // top-right - INCREASED from 0.5, 0.5
+             -0.8f, -0.8f   // bottom-left - INCREASED from -0.5, -0.5
+        };
+
+        glGenVertexArrays(1, &crossVAO);
+        glGenBuffers(1, &crossVBO);
+
+        glBindVertexArray(crossVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, crossVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(crossVertices), crossVertices, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+    }
+
+    // Use HUD shader
+    glUseProgram(hudShaderProgram);
+
+    // Set up orthographic projection
+    glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(SCR_WIDTH), 0.0f, static_cast<float>(SCR_HEIGHT));
+    glUniformMatrix4fv(glGetUniformLocation(hudShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform3f(glGetUniformLocation(hudShaderProgram, "crossColor"), color.x, color.y, color.z);
+
+    // Calculate transformation for the cross
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, 0.0f));
+    model = glm::scale(model, glm::vec3(size, size, 1.0f));
+    glUniformMatrix4fv(glGetUniformLocation(hudShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+
+    // Set THICKER line width for bolder X
+    glLineWidth(6.0f); // INCREASED from 3.0f to 6.0f
+
+    // Draw the X-shaped cross (two diagonal lines)
+    glBindVertexArray(crossVAO);
+    glDrawArrays(GL_LINES, 0, 4); // 4 vertices = 2 lines
+
+    // Reset line width
+    glLineWidth(1.0f);
+
+    // Restore state
+    glBindVertexArray(last_vertex_array);
+    glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+    glBindTexture(GL_TEXTURE_2D, last_texture);
+    glUseProgram(last_program);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+}
+
+// Render HUD function with egg icon and miss indicators
 void renderHUD() {
     // Only show HUD during gameplay
     if (currentGameState != GAME_PLAYING) return;
@@ -2596,30 +2692,44 @@ void renderHUD() {
     GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
     glDisable(GL_DEPTH_TEST); // Disable depth test for 2D rendering
 
-    // Try different positions and sizes for the egg icon
+    // Render egg icon and score
     float iconWidth = 50.0f;
     float iconHeight = 40.0f;
-
-    // Position 1: Top-left corner (most visible)
     RenderEggIcon(10.0f, SCR_HEIGHT - 50.0f, iconWidth, iconHeight, glm::vec3(1.0f, 1.0f, 1.0f));
 
-    // Then render all text
-    std::string scoreText = ":" + std::to_string(score);
+    std::string scoreText = " " + std::to_string(score);
     RenderText(scoreText, iconWidth + 10.0f, SCR_HEIGHT - 40.0f, 0.5f, glm::vec3(1.0f, 1.0f, 0.0f));
 
     // Render high score in top-left below score
-    std::string highScoreText = "HIGH: " + std::to_string(highScore);
-    RenderText(highScoreText, 25.0f, SCR_HEIGHT - 90.0f, 0.5f, glm::vec3(0.0f, 1.0f, 1.0f));
+    std::string highScoreText = "BEST: " + std::to_string(highScore);
+    RenderText(highScoreText, 15.0f, SCR_HEIGHT - 90.0f, 0.5f, glm::vec3(0.0f, 1.0f, 1.0f));
 
     // Render lives in top-left below high score
     std::string livesText = "LIVES: " + std::to_string(lives);
     glm::vec3 livesColor = (lives <= 1) ? glm::vec3(1.0f, 0.3f, 0.3f) : glm::vec3(0.3f, 1.0f, 0.3f);
-    RenderText(livesText, 25.0f, SCR_HEIGHT - 130.0f, 0.5f, livesColor);
+    RenderText(livesText, 15.0f, SCR_HEIGHT - 130.0f, 0.5f, livesColor);
 
-    // Render misses in top-left below lives
-    std::string missesText = "MISSES: " + std::to_string(missedEggs) + "/" + std::to_string(MAX_MISSES);
-    glm::vec3 missesColor = (missedEggs >= MAX_MISSES - 1) ? glm::vec3(1.0f, 0.3f, 0.3f) : glm::vec3(1.0f, 1.0f, 1.0f);
-    RenderText(missesText, 25.0f, SCR_HEIGHT - 170.0f, 0.5f, missesColor);
+    // Render miss indicators in HUD (Fruit Ninja style)
+    float missIconStartX = SCR_WIDTH - 150.0f; // Right side of screen
+    float missIconY = SCR_HEIGHT - 50.0f; // Moved down a bit for better visibility
+    float missIconSpacing = 55.0f;
+
+
+    // Render miss indicators as crosses
+    for (int i = 0; i < MAX_MISSES; i++) {
+        float x = missIconStartX + (i * missIconSpacing);
+
+        if (i < missedEggs) {
+            // Red cross for actual misses
+            renderMissCrossHUD(x, missIconY, 25.0f, glm::vec3(1.0f, 0.0f, 0.0f)); // Bright red
+        }
+        else {
+            // Blue cross for remaining misses
+            renderMissCrossHUD(x, missIconY, 25.0f, glm::vec3(0.2f, 0.6f, 1.0f)); // Bright blue
+        }
+    }
+
+   
 
     // Render respawn timer if player is dead but game isn't over
     if (!playerAlive && currentGameState == GAME_PLAYING) {
@@ -3288,7 +3398,27 @@ int main() {
 
             // View and projection matrices
             glm::mat4 view = glm::lookAt(cameraPos, playerPos, cameraUp);
-            glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+
+            // Safe aspect ratio calculation
+            float aspectRatio;
+            if (SCR_HEIGHT > 0) {
+                aspectRatio = (float)SCR_WIDTH / (float)SCR_HEIGHT;
+            }
+            else {
+                aspectRatio = 1.0f; // Fallback to prevent division by zero
+            }
+
+            // Additional safety checks
+            if (aspectRatio <= 0.0f || !std::isfinite(aspectRatio)) {
+                aspectRatio = 1.0f;
+            }
+
+            // Use a minimum valid value for aspect ratio
+            const float MIN_ASPECT_RATIO = 0.1f;
+            const float MAX_ASPECT_RATIO = 10.0f;
+            aspectRatio = glm::clamp(aspectRatio, MIN_ASPECT_RATIO, MAX_ASPECT_RATIO);
+
+            glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
 
             // Set shader uniforms
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
