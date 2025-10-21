@@ -181,6 +181,20 @@ bool newHighScoreAchieved = false;
 bool showHighScoreInput = false;
 std::string playerNameInput = "Player";
 
+// Player profile structure
+struct PlayerProfile {
+    std::string playerName;
+    int gamesPlayed;
+    int totalScore;
+    time_t firstPlayed;
+    time_t lastPlayed;
+};
+
+PlayerProfile currentPlayer;
+bool profileLoaded = false;
+const std::string PROFILE_FILE = "player_profile.dat";
+
+
 // Joystick properties
 bool joystickPresent = false;
 int joystickId = GLFW_JOYSTICK_1;
@@ -501,6 +515,77 @@ void saveSettings() {
     std::cout << "Player position saved: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
 }
 
+// Player profile functions
+void loadPlayerProfile() {
+    std::ifstream file(PROFILE_FILE, std::ios::binary);
+
+    if (!file.is_open()) {
+        std::cout << "No player profile found. Creating new profile." << std::endl;
+        currentPlayer.playerName = "Player";
+        currentPlayer.gamesPlayed = 0;
+        currentPlayer.totalScore = 0;
+        currentPlayer.firstPlayed = time(0);
+        currentPlayer.lastPlayed = time(0);
+        profileLoaded = true;
+        return;
+    }
+
+    // Read the profile data
+    size_t nameLength;
+    file.read(reinterpret_cast<char*>(&nameLength), sizeof(size_t));
+
+    char* nameBuffer = new char[nameLength + 1];
+    file.read(nameBuffer, nameLength);
+    nameBuffer[nameLength] = '\0';
+    currentPlayer.playerName = nameBuffer;
+    delete[] nameBuffer;
+
+    file.read(reinterpret_cast<char*>(&currentPlayer.gamesPlayed), sizeof(int));
+    file.read(reinterpret_cast<char*>(&currentPlayer.totalScore), sizeof(int));
+    file.read(reinterpret_cast<char*>(&currentPlayer.firstPlayed), sizeof(time_t));
+    file.read(reinterpret_cast<char*>(&currentPlayer.lastPlayed), sizeof(time_t));
+
+    file.close();
+
+    profileLoaded = true;
+    std::cout << "Player profile loaded: " << currentPlayer.playerName << std::endl;
+}
+
+void savePlayerProfile() {
+    std::ofstream file(PROFILE_FILE, std::ios::binary);
+    if (!file.is_open()) {
+        std::cout << "ERROR: Could not save player profile!" << std::endl;
+        return;
+    }
+
+    // Update profile stats
+    currentPlayer.gamesPlayed++;
+    currentPlayer.totalScore += score;
+    currentPlayer.lastPlayed = time(0);
+
+    // Write profile data
+    size_t nameLength = currentPlayer.playerName.length();
+    file.write(reinterpret_cast<const char*>(&nameLength), sizeof(size_t));
+    file.write(currentPlayer.playerName.c_str(), nameLength);
+    file.write(reinterpret_cast<const char*>(&currentPlayer.gamesPlayed), sizeof(int));
+    file.write(reinterpret_cast<const char*>(&currentPlayer.totalScore), sizeof(int));
+    file.write(reinterpret_cast<const char*>(&currentPlayer.firstPlayed), sizeof(time_t));
+    file.write(reinterpret_cast<const char*>(&currentPlayer.lastPlayed), sizeof(time_t));
+
+    file.close();
+    std::cout << "Player profile saved: " << currentPlayer.playerName << std::endl;
+}
+
+void updatePlayerProfile() {
+    if (!profileLoaded) return;
+
+    currentPlayer.gamesPlayed++;
+    currentPlayer.totalScore += score;
+    currentPlayer.lastPlayed = time(0);
+
+    savePlayerProfile();
+}
+
 // Auto-save function to call periodically
 void autoSaveIfNeeded() {
     static float lastSaveTime = 0.0f;
@@ -602,23 +687,46 @@ void addHighScore(const std::string& name, int score) {
     std::cout << "New high score added: " << name << " - " << score << std::endl;
 }
 
+void submitHighScoreWithCurrentName() {
+    addHighScore(currentPlayer.playerName, score);
+    showHighScoreInput = false;
+    newHighScoreAchieved = false;
+    updatePlayerProfile();
+}
+
 void checkForHighScore() {
     if (score > 0 && score > highScore) {
         newHighScoreAchieved = true;
-        showHighScoreInput = true;
+
+        // Only show input if player hasn't set a custom name yet
+        if (currentPlayer.playerName == "Player") {
+            showHighScoreInput = true;
+        }
+        else {
+            // Use existing player name automatically
+            submitHighScoreWithCurrentName();
+        }
+
         std::cout << "NEW HIGH SCORE ACHIEVED: " << score << "! Previous: " << highScore << std::endl;
     }
 }
+
+
 
 void submitHighScore() {
     if (playerNameInput.empty()) {
         playerNameInput = "Player";
     }
+
+    // Update player profile with new name
+    currentPlayer.playerName = playerNameInput;
     addHighScore(playerNameInput, score);
     showHighScoreInput = false;
     newHighScoreAchieved = false;
-}
 
+    // Save the updated profile
+    updatePlayerProfile();
+}
 // Boundary checking function
 void enforceWorldBoundaries(glm::vec3& position) {
     float boundary = WORLD_BOUNDARY - playerRadius;
@@ -893,6 +1001,7 @@ void killPlayer() {
         if (lives <= 0) {
             currentGameState = GAME_OVER;
             checkForHighScore(); // Check if this is a new high score
+            updatePlayerProfile(); // Save profile with game results
             std::cout << "GAME OVER! Final Score: " << score << std::endl;
             std::cout << "Reason: No lives remaining!" << std::endl;
         }
@@ -1113,7 +1222,7 @@ void resetGame() {
     playerRespawnTimer = 0.0f;
     newHighScoreAchieved = false;
     showHighScoreInput = false;
-    playerNameInput = "Player";
+    // Don't reset playerNameInput - keep the current profile name
 
     std::cout << "Game reset! Ready for new game." << std::endl;
 }
@@ -3064,6 +3173,37 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Player Profile")) {
+        ImGui::Text("Player Name: %s", currentPlayer.playerName.c_str());
+        ImGui::Text("Games Played: %d", currentPlayer.gamesPlayed);
+        ImGui::Text("Total Score: %d", currentPlayer.totalScore);
+
+        // Format dates
+        char firstPlayed[20], lastPlayed[20];
+        strftime(firstPlayed, sizeof(firstPlayed), "%Y-%m-%d", localtime(&currentPlayer.firstPlayed));
+        strftime(lastPlayed, sizeof(lastPlayed), "%Y-%m-%d", localtime(&currentPlayer.lastPlayed));
+
+        ImGui::Text("First Played: %s", firstPlayed);
+        ImGui::Text("Last Played: %s", lastPlayed);
+
+        // Add button to change name
+        if (ImGui::Button("Change Player Name")) {
+            showHighScoreInput = true;
+            playerNameInput = currentPlayer.playerName;
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Reset Profile")) {
+            currentPlayer.playerName = "Player";
+            currentPlayer.gamesPlayed = 0;
+            currentPlayer.totalScore = 0;
+            currentPlayer.firstPlayed = time(0);
+            currentPlayer.lastPlayed = time(0);
+            savePlayerProfile();
+        }
+    }
+
     if (ImGui::CollapsingHeader("Help")) {
         ImGui::Text("WASD: Move player");
         ImGui::Text("Mouse: Look around");
@@ -3133,6 +3273,7 @@ int main() {
 
     // Initialize high score system
     loadHighScores();
+    loadPlayerProfile();
     std::cout << "High score system initialized. Top score: " << highScore << std::endl;
 
     // Load saved settings
