@@ -50,7 +50,7 @@ const float WORLD_BOUNDARY = GROUND_SIZE / 2.0f + 1.0f; // Slightly smaller than
 glm::vec3 playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
 glm::vec3 playerTargetPos = playerPos;
 float playerSpeed = 8.0f;
-float playerRadius = 1.0f;
+float playerRadius = 0.6f;
 float playerRotation = 0.0f;
 float playerRotationTarget = 0.0f;
 bool playerAlive = true;
@@ -194,7 +194,6 @@ PlayerProfile currentPlayer;
 bool profileLoaded = false;
 const std::string PROFILE_FILE = "player_profile.dat";
 
-
 // Joystick properties
 bool joystickPresent = false;
 int joystickId = GLFW_JOYSTICK_1;
@@ -211,6 +210,25 @@ float scrollSensitivity = 0.5f;
 // Timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
+
+// Postprocessing effects
+struct PostProcessEffect {
+    float timer;
+    float duration;
+    float intensity;
+    bool active;
+};
+
+PostProcessEffect screenShakeEffect = { 0.0f, 0.0f, 0.0f, false };
+float SCREEN_SHAKE_DURATION = 0.5f;
+float SCREEN_SHAKE_INTENSITY = 0.02f;
+
+// Postprocessing framebuffer
+unsigned int framebuffer;
+unsigned int textureColorbuffer;
+unsigned int rbo;
+unsigned int postprocessVAO, postprocessVBO;
+unsigned int postprocessShaderProgram;
 
 // Text rendering structures
 struct Character {
@@ -370,6 +388,67 @@ void main()
 }
 )";
 
+// Postprocessing shader sources
+const char* postprocessVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+void main()
+{
+    gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0);
+    TexCoords = aTexCoords;
+}
+)";
+
+const char* postprocessFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+in vec2 TexCoords;
+
+uniform sampler2D screenTexture;
+uniform float time;
+uniform float shakeIntensity;
+uniform vec2 screenSize;
+
+void main()
+{
+    // Calculate shake offset
+    vec2 shakeOffset = vec2(
+        sin(time * 50.0) * shakeIntensity,
+        cos(time * 40.0) * shakeIntensity
+    );
+    
+    // Apply blur based on shake intensity
+    vec2 texCoord = TexCoords + shakeOffset;
+    
+    // Simple blur effect
+    vec4 color = vec4(0.0);
+    float blurAmount = shakeIntensity * 0.5;
+    
+    if (blurAmount > 0.0) {
+        // Sample multiple times for blur
+        for (int i = -1; i <= 1; i++) {
+            for (int j = -1; j <= 1; j++) {
+                vec2 offset = vec2(i, j) / screenSize * blurAmount * 2.0;
+                color += texture(screenTexture, texCoord + offset);
+            }
+        }
+        color /= 9.0;
+        
+        // Add subtle red tint during shake
+        color.r += shakeIntensity * 0.1;
+    } else {
+        color = texture(screenTexture, texCoord);
+    }
+    
+    FragColor = color;
+}
+)";
+
 // Text shader sources
 const char* textVertexShaderSource = R"(
 #version 330 core
@@ -439,6 +518,114 @@ void main()
 }
 )";
 
+
+unsigned int compileShader(unsigned int type, const char* source) {
+    unsigned int shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+
+    int success;
+    char infoLog[512];
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(shader, 512, nullptr, infoLog);
+        std::cout << "ERROR::SHADER::COMPILATION_FAILED\n" << infoLog << std::endl;
+    }
+
+    return shader;
+}
+
+unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource) {
+    unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource);
+    unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
+
+    unsigned int shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+
+    int success;
+    char infoLog[512];
+    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
+        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+    }
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    return shaderProgram;
+}
+
+
+// Postprocessing functions
+void initPostProcessing() {
+    // Create framebuffer
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    // Create texture attachment
+    glGenTextures(1, &textureColorbuffer);
+    glBindTexture(GL_TEXTURE_2D, textureColorbuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureColorbuffer, 0);
+
+    // Create renderbuffer for depth and stencil
+    glGenRenderbuffers(1, &rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, SCR_WIDTH, SCR_HEIGHT);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
+
+    // Check framebuffer completeness
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cout << "ERROR::FRAMEBUFFER:: Framebuffer is not complete!" << std::endl;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Create postprocessing quad
+    float quadVertices[] = {
+        // positions   // texCoords
+        -1.0f,  1.0f,  0.0f, 1.0f,
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+
+        -1.0f,  1.0f,  0.0f, 1.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+         1.0f,  1.0f,  1.0f, 1.0f
+    };
+
+    glGenVertexArrays(1, &postprocessVAO);
+    glGenBuffers(1, &postprocessVBO);
+    glBindVertexArray(postprocessVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, postprocessVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+
+    // Create postprocessing shader
+    postprocessShaderProgram = createShaderProgram(postprocessVertexShaderSource, postprocessFragmentShaderSource);
+}
+
+void triggerScreenShake() {
+    screenShakeEffect.active = true;
+    screenShakeEffect.timer = SCREEN_SHAKE_DURATION;
+    screenShakeEffect.duration = SCREEN_SHAKE_DURATION;
+    screenShakeEffect.intensity = SCREEN_SHAKE_INTENSITY;
+}
+
+void updatePostProcessing() {
+    if (screenShakeEffect.active) {
+        screenShakeEffect.timer -= deltaTime;
+        if (screenShakeEffect.timer <= 0.0f) {
+            screenShakeEffect.active = false;
+        }
+    }
+}
 
 // Settings system functions
 void loadSettings() {
@@ -711,8 +898,6 @@ void checkForHighScore() {
     }
 }
 
-
-
 void submitHighScore() {
     if (playerNameInput.empty()) {
         playerNameInput = "Player";
@@ -727,6 +912,7 @@ void submitHighScore() {
     // Save the updated profile
     updatePlayerProfile();
 }
+
 // Boundary checking function
 void enforceWorldBoundaries(glm::vec3& position) {
     float boundary = WORLD_BOUNDARY - playerRadius;
@@ -997,9 +1183,17 @@ void killPlayer() {
         lives--;
         playerRespawnTimer = PLAYER_RESPAWN_TIME;
 
+        // Trigger screen shake effect
+        triggerScreenShake();
+
         // Check for game over due to no lives
         if (lives <= 0) {
             currentGameState = GAME_OVER;
+
+            // Stop the screen shake effect when game over is triggered
+            screenShakeEffect.active = false;
+            screenShakeEffect.timer = 0.0f;
+
             checkForHighScore(); // Check if this is a new high score
             updatePlayerProfile(); // Save profile with game results
             std::cout << "GAME OVER! Final Score: " << score << std::endl;
@@ -1036,6 +1230,11 @@ void checkForMissedEggs() {
             // Check for game over due to too many misses
             if (missedEggs >= MAX_MISSES) {
                 currentGameState = GAME_OVER;
+
+                // Stop any active screen shake effect
+                screenShakeEffect.active = false;
+                screenShakeEffect.timer = 0.0f;
+
                 checkForHighScore(); // Check if this is a new high score
                 std::cout << "GAME OVER! Too many missed eggs! Final Score: " << score << std::endl;
             }
@@ -1231,6 +1430,12 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     SCR_WIDTH = width;
     SCR_HEIGHT = height;
     glViewport(0, 0, width, height);
+
+    // Update framebuffer size
+    glBindTexture(GL_TEXTURE_2D, textureColorbuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, SCR_WIDTH, SCR_HEIGHT);
 
     // Update text projection matrix when window is resized
     glUseProgram(textShaderProgram);
@@ -1737,44 +1942,7 @@ void checkJoystickConnection() {
     }
 }
 
-unsigned int compileShader(unsigned int type, const char* source) {
-    unsigned int shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, nullptr);
-    glCompileShader(shader);
 
-    int success;
-    char infoLog[512];
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::COMPILATION_FAILED\n" << infoLog << std::endl;
-    }
-
-    return shader;
-}
-
-unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource) {
-    unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource);
-    unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
-
-    unsigned int shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-
-    int success;
-    char infoLog[512];
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-    if (!success) {
-        glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
-    }
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    return shaderProgram;
-}
 
 // Texture loading function
 unsigned int loadTexture(const char* path) {
@@ -2838,7 +3006,7 @@ void renderHUD() {
         }
     }
 
-   
+
 
     // Render respawn timer if player is dead but game isn't over
     if (!playerAlive && currentGameState == GAME_PLAYING) {
@@ -3109,6 +3277,26 @@ void showCameraSettingsWindow() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Postprocessing Effects")) {
+        ImGui::Text("Screen Shake Effect:");
+        ImGui::Text("Active: %s", screenShakeEffect.active ? "YES" : "NO");
+        if (screenShakeEffect.active) {
+            ImGui::Text("Time remaining: %.2f seconds", screenShakeEffect.timer);
+        }
+
+        if (ImGui::Button("Test Screen Shake")) {
+            triggerScreenShake();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Stop Screen Shake")) {
+            screenShakeEffect.active = false;
+        }
+
+        ImGui::SliderFloat("Shake Intensity", &SCREEN_SHAKE_INTENSITY, 0.01f, 0.1f);
+        ImGui::SliderFloat("Shake Duration", &SCREEN_SHAKE_DURATION, 0.1f, 2.0f);
+    }
+
     if (ImGui::CollapsingHeader("High Scores")) {
         ImGui::Text("Current High Score: %d", highScore);
         ImGui::Separator();
@@ -3227,6 +3415,9 @@ void showCameraSettingsWindow() {
         ImGui::Text("  - Poison eggs now chase the player!");
         ImGui::Text("  - They start chasing after a short delay");
         ImGui::Text("  - Adjust chase speed and delay in AI Settings");
+        ImGui::Text("POSTPROCESSING EFFECTS:");
+        ImGui::Text("  - Screen shake and blur when hitting poison eggs");
+        ImGui::Text("  - Adjust intensity and duration in Postprocessing Effects");
     }
     ImGui::End();
 }
@@ -3250,6 +3441,10 @@ int main() {
     std::cout << "  - Auto-saves every 30 seconds during gameplay" << std::endl;
     std::cout << "  - Press F5 for quick manual save" << std::endl;
     std::cout << "  - Settings are loaded automatically on startup" << std::endl;
+    std::cout << std::endl;
+    std::cout << "NEW POSTPROCESSING EFFECTS:" << std::endl;
+    std::cout << "  - Screen shake and blur when hitting poison eggs" << std::endl;
+    std::cout << "  - Adjust intensity in F1 settings" << std::endl;
     std::cout << std::endl;
     std::cout << "Controls:" << std::endl;
     std::cout << "  - WASD: Move the sphere" << std::endl;
@@ -3293,7 +3488,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES + SETTINGS SAVE)", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES + SETTINGS SAVE + POSTPROCESSING)", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -3338,6 +3533,9 @@ int main() {
     unsigned int shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
     unsigned int missShaderProgram = createShaderProgram(missVertexShaderSource, missFragmentShaderSource);
     unsigned int effectShaderProgram = createShaderProgram(effectVertexShaderSource, effectFragmentShaderSource);
+
+    // Initialize postprocessing
+    initPostProcessing();
 
     // Initialize text rendering
     initTextRendering();
@@ -3499,6 +3697,9 @@ int main() {
             updateCollectionEffects();
             updateDeathEffects();
 
+            // Update postprocessing effects
+            updatePostProcessing();
+
             // Update player respawn
             updatePlayer();
 
@@ -3528,7 +3729,8 @@ int main() {
         // Show camera settings window
         showCameraSettingsWindow();
 
-        // Rendering
+        // First render pass: render to framebuffer
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -3708,6 +3910,35 @@ int main() {
             }
         }
 
+        // Second render pass: render framebuffer texture to screen with postprocessing
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Use postprocessing shader
+        glUseProgram(postprocessShaderProgram);
+        glBindVertexArray(postprocessVAO);
+        glDisable(GL_DEPTH_TEST);
+
+        // Bind the framebuffer texture
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, textureColorbuffer);
+
+        // Set postprocessing uniforms
+        glUniform1f(glGetUniformLocation(postprocessShaderProgram, "time"), currentFrame);
+        glUniform2f(glGetUniformLocation(postprocessShaderProgram, "screenSize"), (float)SCR_WIDTH, (float)SCR_HEIGHT);
+
+        // Calculate shake intensity (fade out over time)
+        float shakeIntensity = 0.0f;
+        if (screenShakeEffect.active) {
+            shakeIntensity = screenShakeEffect.intensity * (screenShakeEffect.timer / screenShakeEffect.duration);
+        }
+        glUniform1f(glGetUniformLocation(postprocessShaderProgram, "shakeIntensity"), shakeIntensity);
+
+        // Render the quad with postprocessing effects
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glEnable(GL_DEPTH_TEST);
+
         // Render appropriate UI based on game state
         switch (currentGameState) {
         case GAME_START:
@@ -3742,6 +3973,14 @@ int main() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+
+    // Clean up postprocessing resources
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &textureColorbuffer);
+    glDeleteRenderbuffers(1, &rbo);
+    glDeleteVertexArrays(1, &postprocessVAO);
+    glDeleteBuffers(1, &postprocessVBO);
+    glDeleteProgram(postprocessShaderProgram);
 
     // Clean up text rendering resources
     glDeleteProgram(textShaderProgram);
