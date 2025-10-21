@@ -57,6 +57,7 @@ bool playerAlive = true;
 float playerRespawnTimer = 0.0f;
 const float PLAYER_RESPAWN_TIME = 3.0f;
 
+
 // Egg properties
 struct Egg {
     glm::vec3 position;
@@ -163,6 +164,22 @@ struct DeathEffect {
 std::vector<DeathEffect> deathEffects;
 const float DEATH_EFFECT_DURATION = 2.0f;
 const int DEATH_PARTICLES = 20;
+
+// Trail effect properties
+struct TrailParticle {
+    glm::vec3 position;
+    glm::vec3 color;
+    float timer;
+    float duration;
+    float scale;
+};
+
+std::vector<TrailParticle> trailParticles;
+float trailSpawnTimer = 0.0f;
+float TRAIL_SPAWN_INTERVAL = 0.05f; // Spawn trail particle every 0.05 seconds
+ float TRAIL_DURATION = 1.0f; // How long trail particles last
+ float TRAIL_PARTICLE_SCALE = 0.5f; // Size of trail particles
+const int MAX_TRAIL_PARTICLES = 50; // Maximum number of trail particles
 
 // High score system
 int highScore = 0;
@@ -275,6 +292,9 @@ GameSettings currentSettings;
 unsigned int eggIconTexture;
 unsigned int iconVAO, iconVBO;
 unsigned int iconShaderProgram;
+
+// Trail texture
+unsigned int trailTexture;
 
 // Vertex shader source
 const char* vertexShaderSource = R"(
@@ -427,7 +447,7 @@ void main()
     
     // Simple blur effect
     vec4 color = vec4(0.0);
-    float blurAmount = shakeIntensity * 0.5;
+    float blurAmount = shakeIntensity * 0.5; 
     
     if (blurAmount > 0.0) {
         // Sample multiple times for blur
@@ -519,6 +539,53 @@ void main()
 )";
 
 
+// Trail shader sources
+const char* trailVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoord;
+
+out vec2 TexCoord;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main()
+{
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+    TexCoord = aTexCoord;
+}
+)";
+
+const char* trailFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+in vec2 TexCoord;
+
+uniform sampler2D trailTexture;
+uniform vec3 trailColor;
+uniform float alpha;
+
+void main()
+{
+    vec4 texColor = texture(trailTexture, TexCoord);
+    
+    // Use texture alpha and apply uniform alpha for fading
+    float finalAlpha = texColor.a * alpha;
+    
+    // Mix texture color with trail color
+    vec3 finalColor = mix(texColor.rgb, trailColor, 0.3);
+    
+    FragColor = vec4(finalColor, finalAlpha);
+    
+    // Discard fully transparent pixels
+    if (FragColor.a < 0.01)
+        discard;
+}
+)";
+
 unsigned int compileShader(unsigned int type, const char* source) {
     unsigned int shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -558,6 +625,22 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
     return shaderProgram;
 }
 
+
+// Generate quad geometry for trail particles
+void generateTrailQuad(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
+    vertices = {
+        // positions      // texture coords
+        -0.5f,  0.5f, 0.0f,  0.0f, 1.0f,  // top-left
+         0.5f,  0.5f, 0.0f,  1.0f, 1.0f,  // top-right
+         0.5f, -0.5f, 0.0f,  1.0f, 0.0f,  // bottom-right
+        -0.5f, -0.5f, 0.0f,  0.0f, 0.0f   // bottom-left
+    };
+
+    indices = {
+        0, 1, 2,  // first triangle
+        2, 3, 0   // second triangle
+    };
+}
 
 // Postprocessing functions
 void initPostProcessing() {
@@ -616,6 +699,13 @@ void triggerScreenShake() {
     screenShakeEffect.timer = SCREEN_SHAKE_DURATION;
     screenShakeEffect.duration = SCREEN_SHAKE_DURATION;
     screenShakeEffect.intensity = SCREEN_SHAKE_INTENSITY;
+}
+
+// Function to stop screen shake immediately
+void stopScreenShake() {
+    screenShakeEffect.active = false;
+    screenShakeEffect.timer = 0.0f;
+    screenShakeEffect.intensity = 0.0f;
 }
 
 void updatePostProcessing() {
@@ -1176,6 +1266,51 @@ void updateDeathEffects() {
         [](const DeathEffect& effect) { return !effect.active; }), deathEffects.end());
 }
 
+// Update trail effects
+void updateTrailEffects() {
+    // Only update trails during gameplay
+    if (currentGameState != GAME_PLAYING) return;
+
+    // Update existing trail particles
+    for (auto it = trailParticles.begin(); it != trailParticles.end(); ) {
+        it->timer -= deltaTime;
+
+        if (it->timer <= 0.0f) {
+            it = trailParticles.erase(it);
+        }
+        else {
+            ++it;
+        }
+    }
+
+    // Spawn new trail particles when player is moving and alive
+    if (playerAlive) {
+        trailSpawnTimer += deltaTime;
+
+        // Check if player is actually moving (position changed)
+        static glm::vec3 lastPlayerPos = playerPos;
+        bool isMoving = glm::distance(playerPos, lastPlayerPos) > 0.01f;
+        lastPlayerPos = playerPos;
+
+        if (isMoving && trailSpawnTimer >= TRAIL_SPAWN_INTERVAL) {
+            // Remove oldest particle if we're at the limit
+            if (trailParticles.size() >= MAX_TRAIL_PARTICLES) {
+                trailParticles.erase(trailParticles.begin());
+            }
+
+            TrailParticle newParticle;
+            newParticle.position = playerPos - glm::vec3(0.0f, playerRadius * 0.5f, 0.0f); // Position below player
+            newParticle.color = glm::vec3(0.8f, 0.2f, 0.2f); // Red color matching player
+            newParticle.timer = TRAIL_DURATION;
+            newParticle.duration = TRAIL_DURATION;
+            newParticle.scale = TRAIL_PARTICLE_SCALE;
+
+            trailParticles.push_back(newParticle);
+            trailSpawnTimer = 0.0f;
+        }
+    }
+}
+
 // Player death function
 void killPlayer() {
     if (playerAlive) {
@@ -1191,8 +1326,7 @@ void killPlayer() {
             currentGameState = GAME_OVER;
 
             // Stop the screen shake effect when game over is triggered
-            screenShakeEffect.active = false;
-            screenShakeEffect.timer = 0.0f;
+            stopScreenShake();
 
             checkForHighScore(); // Check if this is a new high score
             updatePlayerProfile(); // Save profile with game results
@@ -1232,8 +1366,7 @@ void checkForMissedEggs() {
                 currentGameState = GAME_OVER;
 
                 // Stop any active screen shake effect
-                screenShakeEffect.active = false;
-                screenShakeEffect.timer = 0.0f;
+                stopScreenShake();
 
                 checkForHighScore(); // Check if this is a new high score
                 std::cout << "GAME OVER! Too many missed eggs! Final Score: " << score << std::endl;
@@ -1412,6 +1545,7 @@ void resetGame() {
     missIndicators.clear();
     collectionEffects.clear();
     deathEffects.clear();
+    trailParticles.clear(); // Clear trail particles on reset
     playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
     playerTargetPos = playerPos;
     playerRotation = 0.0f;
@@ -1419,6 +1553,7 @@ void resetGame() {
     eggSpawnTimer = 0.0f;
     poisonEggSpawnTimer = 0.0f;
     playerRespawnTimer = 0.0f;
+    trailSpawnTimer = 0.0f; // Reset trail timer
     newHighScoreAchieved = false;
     showHighScoreInput = false;
     // Don't reset playerNameInput - keep the current profile name
@@ -1942,8 +2077,6 @@ void checkJoystickConnection() {
     }
 }
 
-
-
 // Texture loading function
 unsigned int loadTexture(const char* path) {
     unsigned int textureID;
@@ -2002,6 +2135,61 @@ unsigned int loadTexture(const char* path) {
     }
 
     return textureID;
+}
+
+// Load trail texture
+void loadTrailTexture() {
+    std::cout << "Loading trail texture..." << std::endl;
+    trailTexture = loadTexture("trail.png");
+
+    // If texture failed to load, create fallback
+    GLint textureWidth, textureHeight;
+    glBindTexture(GL_TEXTURE_2D, trailTexture);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &textureWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &textureHeight);
+
+    if (textureWidth == 0 || textureHeight == 0) {
+        std::cout << "Trail texture failed to load, creating fallback texture..." << std::endl;
+    }
+    else {
+        std::cout << "Trail texture loaded successfully: " << textureWidth << "x" << textureHeight << std::endl;
+    }
+}
+
+unsigned int trailShaderProgram;
+unsigned int trailVAO, trailVBO, trailEBO;
+std::vector<float> trailVertices;
+std::vector<unsigned int> trailIndices;
+
+void initTrailRendering() {
+    // Compile trail shader
+    trailShaderProgram = createShaderProgram(trailVertexShaderSource, trailFragmentShaderSource);
+
+    // Generate quad geometry
+    generateTrailQuad(trailVertices, trailIndices);
+
+    // Set up VAO, VBO, EBO
+    glGenVertexArrays(1, &trailVAO);
+    glGenBuffers(1, &trailVBO);
+    glGenBuffers(1, &trailEBO);
+
+    glBindVertexArray(trailVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, trailVBO);
+    glBufferData(GL_ARRAY_BUFFER, trailVertices.size() * sizeof(float), trailVertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, trailEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, trailIndices.size() * sizeof(unsigned int), trailIndices.data(), GL_STATIC_DRAW);
+
+    // Position attribute
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Texture coordinate attribute
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(0);
 }
 
 // Initialize icon rendering
@@ -2111,6 +2299,77 @@ void RenderEggIcon(float x, float y, float width, float height, glm::vec3 color)
     glUseProgram(last_program);
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+}
+
+// Render trail effects
+void renderTrailEffects(const glm::mat4& view, const glm::mat4& projection) {
+    if (trailParticles.empty()) return;
+
+    // Save current state
+    GLint last_program, last_texture;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+
+    // Use trail shader
+    glUseProgram(trailShaderProgram);
+
+    // Set view and projection
+    glUniformMatrix4fv(glGetUniformLocation(trailShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(trailShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+    // Bind trail texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, trailTexture);
+    glUniform1i(glGetUniformLocation(trailShaderProgram, "trailTexture"), 0);
+
+    // Enable blending for transparency
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    // Use trail VAO
+    glBindVertexArray(trailVAO);
+
+    // Extract camera vectors for billboarding
+    glm::vec3 cameraRight = glm::vec3(view[0][0], view[1][0], view[2][0]);
+    glm::vec3 cameraUp = glm::vec3(view[0][1], view[1][1], view[2][1]);
+
+    for (const auto& particle : trailParticles) {
+        // Calculate fade based on timer
+        float progress = 1.0f - (particle.timer / particle.duration);
+        float alpha = (1.0f - progress) * 0.8f;
+
+        // Create model matrix with billboarding
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, particle.position);
+
+        // Billboarding matrix
+        glm::mat4 billboardRotation = glm::mat4(1.0f);
+        billboardRotation[0] = glm::vec4(cameraRight, 0.0f);
+        billboardRotation[1] = glm::vec4(cameraUp, 0.0f);
+        billboardRotation[2] = glm::vec4(glm::cross(cameraRight, cameraUp), 0.0f);
+
+        model = model * billboardRotation;
+
+        // Controlled scaling with minimum size
+        float finalScale = particle.scale * (1.0f - progress * 0.7f);
+        finalScale = glm::max(finalScale, particle.scale * 0.3f);
+        model = glm::scale(model, glm::vec3(finalScale));
+
+        // Set shader uniforms
+        glUniformMatrix4fv(glGetUniformLocation(trailShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        glUniform3fv(glGetUniformLocation(trailShaderProgram, "trailColor"), 1, glm::value_ptr(particle.color));
+        glUniform1f(glGetUniformLocation(trailShaderProgram, "alpha"), alpha);
+
+        // Draw the trail particle
+        glDrawElements(GL_TRIANGLES, trailIndices.size(), GL_UNSIGNED_INT, 0);
+    }
+
+    // Restore state
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glBindTexture(GL_TEXTURE_2D, last_texture);
+    glUseProgram(last_program);
 }
 
 // Function to generate sphere vertices and indices
@@ -3266,6 +3525,7 @@ void showCameraSettingsWindow() {
     if (ImGui::CollapsingHeader("Effect System")) {
         ImGui::Text("Collection Effects: %zu", collectionEffects.size());
         ImGui::Text("Death Effects: %zu", deathEffects.size());
+        ImGui::Text("Trail Particles: %zu", trailParticles.size());
 
         if (ImGui::Button("Test Collection Effect")) {
             createCollectionEffect(playerPos, glm::vec3(1.0f, 0.5f, 0.0f));
@@ -3274,6 +3534,34 @@ void showCameraSettingsWindow() {
         ImGui::SameLine();
         if (ImGui::Button("Test Death Effect")) {
             createDeathEffect(playerPos);
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Trail Effects")) {
+        ImGui::Text("Active Trail Particles: %zu", trailParticles.size());
+        ImGui::SliderFloat("Trail Spawn Rate", &TRAIL_SPAWN_INTERVAL, 0.01f, 0.2f);
+        ImGui::SliderFloat("Trail Duration", &TRAIL_DURATION, 0.5f, 3.0f);
+        ImGui::SliderFloat("Trail Particle Size", &TRAIL_PARTICLE_SCALE, 0.1f, 1.0f);
+
+        if (ImGui::Button("Clear All Trails")) {
+            trailParticles.clear();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Test Trail Effect")) {
+            for (int i = 0; i < 10; i++) {
+                TrailParticle testParticle;
+                testParticle.position = playerPos + glm::vec3(
+                    ((float)rand() / RAND_MAX - 0.5f) * 2.0f,
+                    -0.5f,
+                    ((float)rand() / RAND_MAX - 0.5f) * 2.0f
+                );
+                testParticle.color = glm::vec3(1.0f, 0.5f, 0.0f);
+                testParticle.timer = TRAIL_DURATION;
+                testParticle.duration = TRAIL_DURATION;
+                testParticle.scale = TRAIL_PARTICLE_SCALE;
+                trailParticles.push_back(testParticle);
+            }
         }
     }
 
@@ -3415,6 +3703,9 @@ void showCameraSettingsWindow() {
         ImGui::Text("  - Poison eggs now chase the player!");
         ImGui::Text("  - They start chasing after a short delay");
         ImGui::Text("  - Adjust chase speed and delay in AI Settings");
+        ImGui::Text("TRAIL EFFECTS:");
+        ImGui::Text("  - Player leaves a red trail when moving");
+        ImGui::Text("  - Adjust trail settings in Trail Effects section");
         ImGui::Text("POSTPROCESSING EFFECTS:");
         ImGui::Text("  - Screen shake and blur when hitting poison eggs");
         ImGui::Text("  - Adjust intensity and duration in Postprocessing Effects");
@@ -3434,6 +3725,9 @@ int main() {
     std::cout << "NEW AI FEATURE: Poison eggs now chase the player!" << std::endl;
     std::cout << "  - They start chasing after 1 second" << std::endl;
     std::cout << "  - Adjust chase speed in F1 settings" << std::endl;
+    std::cout << std::endl;
+    std::cout << "NEW TRAIL EFFECTS: Player leaves a red trail when moving!" << std::endl;
+    std::cout << "  - Adjust trail settings in F1 menu" << std::endl;
     std::cout << std::endl;
     std::cout << "HIGH SCORE SYSTEM: Your best scores are saved automatically!" << std::endl;
     std::cout << std::endl;
@@ -3488,7 +3782,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES + SETTINGS SAVE + POSTPROCESSING)", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Egg Collector - Fruit Ninja Style! (AI CHASING + HIGH SCORES + SETTINGS SAVE + POSTPROCESSING + TRAIL EFFECTS)", nullptr, nullptr);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -3543,9 +3837,16 @@ int main() {
     // Initialize icon rendering
     initIconRendering();
 
+    // Initialize trail rendering
+    initTrailRendering();
+
+    // Load trail texture
+    loadTrailTexture();
+
     // Generate sphere geometry for player
     std::vector<float> sphereVertices;
     std::vector<unsigned int> sphereIndices;
+
     generateSphere(playerRadius, 36, 18, sphereVertices, sphereIndices);
 
     // Generate sphere geometry for eggs (smaller spheres)
@@ -3570,6 +3871,7 @@ int main() {
 
     // Set up player sphere VAO, VBO, EBO
     unsigned int sphereVAO, sphereVBO, sphereEBO;
+  
     glGenVertexArrays(1, &sphereVAO);
     glGenBuffers(1, &sphereVBO);
     glGenBuffers(1, &sphereEBO);
@@ -3696,6 +3998,7 @@ int main() {
             // Update effect systems
             updateCollectionEffects();
             updateDeathEffects();
+            updateTrailEffects(); // Update trail effects
 
             // Update postprocessing effects
             updatePostProcessing();
@@ -3820,6 +4123,9 @@ int main() {
                     }
                 }
             }
+
+            // Render trail effects
+            renderTrailEffects(view, projection);
 
             // Render miss indicators (Fruit Ninja style) - only in playing state
             if (!missIndicators.empty() && currentGameState == GAME_PLAYING) {
@@ -3995,6 +4301,9 @@ int main() {
     glDeleteVertexArrays(1, &iconVAO);
     glDeleteBuffers(1, &iconVBO);
     glDeleteProgram(iconShaderProgram);
+
+    // Clean up trail texture
+    glDeleteTextures(1, &trailTexture);
 
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteVertexArrays(1, &eggVAO);
