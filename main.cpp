@@ -28,6 +28,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+// SDL MIXER for music
+#include <SDL_mixer.h>
+
+
 // Window dimensions
 unsigned int SCR_WIDTH = 800;
 unsigned int SCR_HEIGHT = 600;
@@ -45,6 +49,13 @@ GameState currentGameState = GAME_START;
 // World boundaries
 const float GROUND_SIZE = 20.0f;
 const float WORLD_BOUNDARY = GROUND_SIZE / 2.0f + 1.0f; // Slightly smaller than ground for visual margin
+
+// Sound effects
+Mix_Chunk* gCollectSound = nullptr;
+Mix_Chunk* gDeathSound = nullptr;
+Mix_Chunk* gMissSound = nullptr;
+Mix_Chunk* gPoisonSound = nullptr;
+Mix_Music* gBackgroundMusic = nullptr;
 
 // Player properties
 glm::vec3 playerPos = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -284,6 +295,10 @@ struct GameSettings {
 
     // Game settings
     float joystickDeadzone;
+
+    // Audio settings
+    int soundVolume;
+    int musicVolume;
 };
 
 GameSettings currentSettings;
@@ -717,6 +732,117 @@ void updatePostProcessing() {
     }
 }
 
+
+// Function to load audio files
+bool loadAudio() {
+    bool success = true;
+
+    // Load sound effects
+    gCollectSound = Mix_LoadWAV("correct.wav");
+    if (!gCollectSound) {
+        std::cout << "Failed to load collect sound: " << Mix_GetError() << std::endl;
+        success = false;
+    }
+
+    gDeathSound = Mix_LoadWAV("break.wav");
+    if (!gDeathSound) {
+        std::cout << "Failed to load death sound: " << Mix_GetError() << std::endl;
+        success = false;
+    }
+
+    gMissSound = Mix_LoadWAV("wrong.wav");
+    if (!gMissSound) {
+        std::cout << "Failed to load miss sound: " << Mix_GetError() << std::endl;
+        success = false;
+    }
+
+    gPoisonSound = Mix_LoadWAV("poison.wav");
+    if (!gPoisonSound) {
+        std::cout << "Failed to load poison sound: " << Mix_GetError() << std::endl;
+        success = false;
+    }
+
+    // Load background music
+    gBackgroundMusic = Mix_LoadMUS("background.mp3");
+    if (!gBackgroundMusic) {
+        std::cout << "Failed to load background music: " << Mix_GetError() << std::endl;
+        success = false;
+    }
+
+    std::cout << "Music loaded successfully!" << std::endl;
+
+    return success;
+}
+
+void playCollectSound() {
+    if (gCollectSound) {
+        Mix_PlayChannel(-1, gCollectSound, 0);
+    }
+}
+
+void playDeathSound() {
+    if (gDeathSound) {
+        Mix_PlayChannel(-1, gDeathSound, 0);
+    }
+}
+
+void playMissSound() {
+    if (gMissSound) {
+        Mix_PlayChannel(-1, gMissSound, 0);
+    }
+}
+
+void playPoisonSound() {
+    if (gPoisonSound) {
+        Mix_PlayChannel(-1, gPoisonSound, 0);
+    }
+}
+
+void playBackgroundMusic() {
+    // Only play if music isn't already playing
+    if (gBackgroundMusic && Mix_PlayingMusic() == 0) {
+        Mix_PlayMusic(gBackgroundMusic, -1); // -1 for infinite loop
+    }
+}
+
+void stopBackgroundMusic() {
+    Mix_HaltMusic();
+}
+
+// Volume control functions
+void setSoundVolume(int volume) {
+    Mix_Volume(-1, volume); // -1 affects all channels
+    std::cout << "Sound effects volume set to: " << volume << std::endl;
+}
+
+void setMusicVolume(int volume) {
+    Mix_VolumeMusic(volume);
+    std::cout << "Music volume set to: " << volume << std::endl;
+}
+
+// Get current volumes
+int getSoundVolume() {
+    return Mix_Volume(-1, -1); // Returns current volume without changing it
+}
+
+int getMusicVolume() {
+    return Mix_VolumeMusic(-1); // Returns current volume without changing it
+}
+
+
+// Add this function
+void cleanupAudio() {
+    if (gCollectSound) Mix_FreeChunk(gCollectSound);
+    if (gDeathSound) Mix_FreeChunk(gDeathSound);
+    if (gMissSound) Mix_FreeChunk(gMissSound);
+    if (gPoisonSound) Mix_FreeChunk(gPoisonSound);
+    if (gBackgroundMusic) Mix_FreeMusic(gBackgroundMusic);
+
+    Mix_CloseAudio();
+    Mix_Quit();
+}
+
+
 // Settings system functions
 void loadSettings() {
     std::ifstream file(SETTINGS_FILE, std::ios::binary);
@@ -736,6 +862,10 @@ void loadSettings() {
         currentSettings.playerPosition = glm::vec3(0.0f, 1.0f, 0.0f);
         currentSettings.playerRotation = 0.0f;
         currentSettings.joystickDeadzone = 0.2f;
+
+        // Set default audio values
+        currentSettings.soundVolume = MIX_MAX_VOLUME;
+        currentSettings.musicVolume = MIX_MAX_VOLUME / 32;
 
         return;
     }
@@ -761,6 +891,10 @@ void loadSettings() {
     playerRotationTarget = currentSettings.playerRotation;
     joystickDeadzone = currentSettings.joystickDeadzone;
 
+    // Apply loaded audio settings
+    setSoundVolume(currentSettings.soundVolume);
+    setMusicVolume(currentSettings.musicVolume);
+
     std::cout << "Settings loaded successfully!" << std::endl;
     std::cout << "Player position: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
 }
@@ -778,6 +912,10 @@ void saveSettings() {
     currentSettings.playerPosition = playerPos;
     currentSettings.playerRotation = playerRotation;
     currentSettings.joystickDeadzone = joystickDeadzone;
+
+    // Update current settings with current values
+    currentSettings.soundVolume = getSoundVolume();
+    currentSettings.musicVolume = getMusicVolume();
 
     std::ofstream file(SETTINGS_FILE, std::ios::binary);
     if (!file.is_open()) {
@@ -1131,6 +1269,8 @@ void spawnPoisonEgg() {
 
 // Enhanced collection effect creation (Fruit Ninja style)
 void createCollectionEffect(const glm::vec3& position, const glm::vec3& color) {
+   
+    playCollectSound();
     CollectionEffect effect;
     effect.position = position;
     effect.color = color;
@@ -1171,6 +1311,7 @@ void createCollectionEffect(const glm::vec3& position, const glm::vec3& color) {
 
 // Enhanced death effect creation
 void createDeathEffect(const glm::vec3& position) {
+    playDeathSound();
     DeathEffect effect;
     effect.position = position;
     effect.timer = DEATH_EFFECT_DURATION;
@@ -1352,6 +1493,7 @@ void respawnPlayer() {
 void checkForMissedEggs() {
     for (auto it = eggs.begin(); it != eggs.end(); ) {
         if (it->active && !it->isPoison && it->lifeTimer <= 0.0f) {
+            playMissSound();
             // Egg expired without being collected - this is a miss!
             missedEggs++;
 
@@ -1494,6 +1636,7 @@ void updateEggs() {
 
                 if (distance < collisionDistance) {
                     if (egg.isPoison) {
+                        //playPoisonSound();
                         // Poison egg - kill player immediately
                         createDeathEffect(egg.position); // Add death effect
                         killPlayer();
@@ -1765,6 +1908,65 @@ void processInput(GLFWwindow* window) {
     static bool spaceKeyPressed = false;
     static bool backspaceKeyPressed = false;
     static bool f5KeyPressed = false;
+    static bool plusKeyPressed = false;
+    static bool minusKeyPressed = false;
+    static bool mKeyPressed = false;
+
+    // Music volume up with + key
+    if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS) {
+        if (!plusKeyPressed) {
+            int currentVol = getMusicVolume();
+            int newVol = std::min(currentVol + 10, MIX_MAX_VOLUME);
+            setMusicVolume(newVol);
+            std::cout << "Music volume: " << newVol << std::endl;
+            plusKeyPressed = true;
+        }
+    }
+    else {
+        plusKeyPressed = false;
+    }
+
+    // Music volume down with - key
+    if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS) {
+        if (!minusKeyPressed) {
+            int currentVol = getMusicVolume();
+            int newVol = std::max(currentVol - 10, 0);
+            setMusicVolume(newVol);
+            std::cout << "Music volume: " << newVol << std::endl;
+            minusKeyPressed = true;
+        }
+    }
+    else {
+        minusKeyPressed = false;
+    }
+
+    // Mute toggle with M key
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
+        if (!mKeyPressed) {
+            static int lastMusicVolume = getMusicVolume();
+            static int lastSoundVolume = getSoundVolume();
+
+            if (getMusicVolume() > 0) {
+                // Mute
+                lastMusicVolume = getMusicVolume();
+                lastSoundVolume = getSoundVolume();
+                setMusicVolume(0);
+                setSoundVolume(0);
+                std::cout << "Audio muted" << std::endl;
+            }
+            else {
+                // Unmute
+                setMusicVolume(lastMusicVolume);
+                setSoundVolume(lastSoundVolume);
+                std::cout << "Audio unmuted" << std::endl;
+            }
+            mKeyPressed = true;
+        }
+    }
+    else {
+        mKeyPressed = false;
+    }
+
 
     // High score input handling
     if (showHighScoreInput) {
@@ -3289,6 +3491,7 @@ void renderHUD() {
     }
 }
 
+
 void showCameraSettingsWindow() {
     if (!showSettings) return;
 
@@ -3679,6 +3882,54 @@ void showCameraSettingsWindow() {
             savePlayerProfile();
         }
     }
+ 
+    if (ImGui::CollapsingHeader("Audio Settings")) {
+        static int soundVolume = MIX_MAX_VOLUME;
+        static int musicVolume = MIX_MAX_VOLUME / 2; // Default to half volume
+
+        // Initialize volumes on first open
+        static bool volumesInitialized = false;
+        if (!volumesInitialized) {
+            soundVolume = getSoundVolume();
+            musicVolume = getMusicVolume();
+            volumesInitialized = true;
+        }
+
+        if (ImGui::SliderInt("Sound Effects Volume", &soundVolume, 0, MIX_MAX_VOLUME)) {
+            setSoundVolume(soundVolume);
+        }
+
+        if (ImGui::SliderInt("Music Volume", &musicVolume, 0, MIX_MAX_VOLUME)) {
+            setMusicVolume(musicVolume);
+        }
+
+        // Volume percentage display
+        ImGui::Text("Sound Volume: %d%%", (soundVolume * 100) / MIX_MAX_VOLUME);
+        ImGui::Text("Music Volume: %d%%", (musicVolume * 100) / MIX_MAX_VOLUME);
+
+        // Test buttons
+        if (ImGui::Button("Test Sound Effect")) {
+            playCollectSound();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Mute All")) {
+            setSoundVolume(0);
+            setMusicVolume(0);
+            soundVolume = 0;
+            musicVolume = 0;
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Default Volumes")) {
+            soundVolume = MIX_MAX_VOLUME;
+            musicVolume = MIX_MAX_VOLUME / 32;
+            setSoundVolume(soundVolume);
+            setMusicVolume(musicVolume);
+        }
+    }
 
     if (ImGui::CollapsingHeader("Help")) {
         ImGui::Text("WASD: Move player");
@@ -3756,6 +4007,20 @@ int main() {
     std::cout << "  - Regular eggs (various colors): +10 points, must collect them all!" << std::endl;
     std::cout << "  - Poison eggs (purple): -1 life, avoid at all costs!" << std::endl;
     std::cout << "  - POISON EGGS NOW CHASE YOU! Be careful!" << std::endl;
+
+    // Initialize SDL_mixer
+    if (Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG) < 0) {
+        std::cout << "Failed to initialize SDL_mixer: " << Mix_GetError() << std::endl;
+        return -1;
+    }
+
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+        std::cout << "Failed to open audio: " << Mix_GetError() << std::endl;
+        return -1;
+    }
+
+    // Allocate mixing channels
+    Mix_AllocateChannels(16);
 
     // Seed random number generator
     srand(static_cast<unsigned int>(time(nullptr)));
@@ -3842,6 +4107,8 @@ int main() {
 
     // Load trail texture
     loadTrailTexture();
+
+    loadAudio();
 
     // Generate sphere geometry for player
     std::vector<float> sphereVertices;
@@ -4248,19 +4515,28 @@ int main() {
         // Render appropriate UI based on game state
         switch (currentGameState) {
         case GAME_START:
+            stopBackgroundMusic();
             renderStartScreen();
             break;
         case GAME_PLAYING:
+            playBackgroundMusic();
             renderHUD();
             break;
         case GAME_PAUSED:
+            Mix_PauseMusic();
             renderHUD(); // Show HUD behind pause screen
             renderPauseScreen();
             break;
         case GAME_OVER:
+            stopBackgroundMusic();
             renderHUD(); // Show HUD behind game over screen
             renderGameOverScreen();
             break;
+        }
+
+        // Resume music when unpausing
+        if (currentGameState == GAME_PLAYING && Mix_PausedMusic()) {
+            Mix_ResumeMusic();
         }
 
         // Render ImGui
@@ -4303,7 +4579,10 @@ int main() {
     glDeleteProgram(iconShaderProgram);
 
     // Clean up trail texture
-    glDeleteTextures(1, &trailTexture);
+    glDeleteTextures(1, &trailTexture);  
+
+    // Call cleanupAudio 
+    cleanupAudio();
 
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteVertexArrays(1, &eggVAO);
