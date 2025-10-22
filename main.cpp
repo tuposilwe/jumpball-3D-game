@@ -3310,7 +3310,10 @@ void renderGameOverScreen() {
         restartWidth += (ch.Advance >> 6) * 0.4f;
     }
     float restartX = (SCR_WIDTH - restartWidth) / 2.0f;
-    RenderText(restartText, restartX, SCR_HEIGHT * 0.2f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+    // Blinking effect
+    float blink = sin(glfwGetTime() * 3.0f) * 0.5f + 0.5f;
+
+    RenderText(restartText, restartX, SCR_HEIGHT * 0.2f, 0.4f, glm::vec3(0.0f, 1.0f, 0.0f) * blink);
 
     // Return to menu prompt
     std::string menuText = "Press ESC for Main Menu";
